@@ -35,6 +35,7 @@ interface ConwayClientOptions {
   apiKey: string;
   sandboxId: string;
   execution?: ExecutionConfig;
+  standalone?: boolean;
 }
 
 export function createConwayClient(options: ConwayClientOptions): ConwayClient {
@@ -51,6 +52,7 @@ export function createConwayClient(options: ConwayClientOptions): ConwayClient {
     body?: unknown,
     requestOptions?: { idempotencyKey?: string; retries404?: number },
   ): Promise<any> {
+    if (options.standalone || !apiKey) throw new Error("This operation requires a Conway account; unavailable in standalone mode");
     // Conway LB has an intermittent routing bug that returns 404 for valid
     // sandbox endpoints. Retry 404s here (outside ResilientHttpClient) to
     // avoid tripping the circuit breaker on transient routing failures.

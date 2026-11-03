@@ -106,6 +106,9 @@ Automatons run on <a href="https://app.conway.tech" target="_blank">Conway Cloud
 
 ## Development
 
+To run on your own VPS with a Claude API key and no Conway account, see
+[Claude standalone setup](docs/CLAUDE_STANDALONE.md).
+
 For the hardened execution modes, migration, autonomous payment budgets and
 remaining host-administration risks, read [Security upgrade](docs/SECURITY_UPGRADE.md)
 before running a funded agent. Host mode retains administration capabilities and

@@ -1,3 +1,4 @@
+import { isStandalone, standaloneHeartbeat } from "../security/standalone.js";
 /**
  * Heartbeat Daemon
  *
@@ -155,8 +156,9 @@ export function createHeartbeatDaemon(
   const isRunning = (): boolean => running;
 
   const forceRun = async (taskName: string): Promise<void> => {
+    if (isStandalone(config) && !standaloneHeartbeat(taskName)) throw new Error("Heartbeat task requires Conway and is unavailable in standalone mode");
     const context = await import("./tick-context.js").then((m) =>
-      m.buildTickContext(rawDb, conway, heartbeatConfig, identity.address, identity.chainType),
+      m.buildTickContext(rawDb, conway, heartbeatConfig, identity.address, identity.chainType, isStandalone(config)),
     );
     await scheduler.executeTask(taskName, context);
   };

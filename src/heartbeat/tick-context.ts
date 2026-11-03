@@ -43,6 +43,7 @@ export async function buildTickContext(
   config: HeartbeatConfig,
   walletAddress?: string,
   chainType?: string,
+  standalone = false,
 ): Promise<TickContext> {
   const tickId = generateTickId();
   const startedAt = new Date();
@@ -50,13 +51,13 @@ export async function buildTickContext(
   // Fetch balances ONCE
   let creditBalance = 0;
   try {
-    creditBalance = await conway.getCreditsBalance();
+    if (!standalone) creditBalance = await conway.getCreditsBalance();
   } catch (err: any) {
     logger.error("Failed to fetch credit balance", err instanceof Error ? err : undefined);
   }
 
   let usdcBalance = 0;
-  if (walletAddress) {
+  if (walletAddress && !standalone) {
     try {
       const network = chainType === "solana" ? "solana:mainnet" : "eip155:8453";
       usdcBalance = await getUsdcBalance(walletAddress, network, chainType as any);
@@ -65,7 +66,7 @@ export async function buildTickContext(
     }
   }
 
-  const survivalTier = getSurvivalTier(creditBalance);
+  const survivalTier = standalone ? "normal" : getSurvivalTier(creditBalance);
   const lowComputeMultiplier = config.lowComputeMultiplier ?? 4;
 
   return {

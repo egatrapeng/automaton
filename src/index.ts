@@ -36,6 +36,7 @@ import { prettySink } from "./observability/pretty-sink.js";
 import { bootstrapTopup } from "./conway/topup.js";
 import { paymentOptionsFor } from "./security/payment-options.js";
 import { resolveExecution } from "./security/execution.js";
+import { isStandalone, validateStandalone } from "./security/standalone.js";
 import { randomUUID } from "crypto";
 import { keccak256, toHex } from "viem";
 
@@ -195,12 +196,13 @@ async function run(): Promise<void> {
     config = await runSetupWizard();
   }
   resolveExecution((config.sandboxId || "").trim(), config.execution);
+  validateStandalone(config);
 
   // Load wallet (chain-aware)
   const { account, chainIdentity, chainType: walletChainType } = await getWallet();
   const resolvedChainType = config.chainType || walletChainType || "evm";
-  const apiKey = config.conwayApiKey || loadApiKeyFromConfig();
-  if (!apiKey) {
+  const apiKey = isStandalone(config) ? "" : config.conwayApiKey || loadApiKeyFromConfig() || "";
+  if (!apiKey && !isStandalone(config)) {
     logger.error("No API key found. Run: automaton --provision");
     process.exit(1);
   }
@@ -247,6 +249,7 @@ async function run(): Promise<void> {
     apiKey,
     sandboxId: config.sandboxId,
     execution: config.execution,
+    standalone: isStandalone(config),
   });
   if (config.execution?.mode === "host") {
     logger.warn("Host administration mode: tools have this process's OS privileges. File guards and redaction are not a sandbox; keep this VPS dedicated.");
@@ -254,7 +257,7 @@ async function run(): Promise<void> {
 
   // Register automaton identity (one-time, immutable)
   const registrationState = db.getIdentity("conwayRegistrationStatus");
-  if (registrationState !== "registered") {
+  if (!isStandalone(config) && registrationState !== "registered") {
     try {
       const genesisPromptHash = config.genesisPrompt
         ? keccak256(toHex(config.genesisPrompt))
@@ -309,7 +312,7 @@ async function run(): Promise<void> {
 
   // Create social client (chain-aware: pass ChainIdentity for Solana signing)
   let social: SocialClientInterface | undefined;
-  if (config.socialRelayUrl) {
+  if (!isStandalone(config) && config.socialRelayUrl) {
     social = createSocialClient(config.socialRelayUrl, resolvedChainType === "solana" ? chainIdentity : account);
     logger.info(`[${new Date().toISOString()}] Social relay: ${config.socialRelayUrl}`);
   }
@@ -345,7 +348,7 @@ async function run(): Promise<void> {
 
   // Bootstrap topup: buy minimum credits ($5) from USDC so the agent can start.
   // The agent decides larger topups itself via the topup_credits tool.
-  try {
+  if (!isStandalone(config)) try {
     let bootstrapTimer: ReturnType<typeof setTimeout>;
     const bootstrapTimeout = new Promise<null>((_, reject) => {
       bootstrapTimer = setTimeout(() => reject(new Error("bootstrap topup timed out")), 15_000);

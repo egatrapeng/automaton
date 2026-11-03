@@ -165,7 +165,7 @@ export function buildContextMessages(
     }
 
     // The agent's thinking as assistant message
-    if (turn.thinking) {
+    if (turn.thinking || turn.toolCalls.length > 0) {
       const msg: ChatMessage = {
         role: "assistant",
         content: turn.thinking,

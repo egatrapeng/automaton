@@ -1,3 +1,4 @@
+import { isStandalone, standaloneHeartbeat } from "../security/standalone.js";
 /**
  * Durable Scheduler
  *
@@ -96,6 +97,7 @@ export class DurableScheduler {
         this.config,
         this.legacyContext.identity.address,
         this.legacyContext.identity.chainType,
+        isStandalone(this.legacyContext.config),
       );
 
       // Get tasks that are due
@@ -122,6 +124,7 @@ export class DurableScheduler {
     const now = new Date();
 
     return schedule.filter((row) => {
+      if (isStandalone(this.legacyContext.config) && !standaloneHeartbeat(row.taskName)) return false;
       // Skip disabled tasks
       if (!row.enabled) return false;
 

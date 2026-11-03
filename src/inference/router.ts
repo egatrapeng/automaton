@@ -46,7 +46,8 @@ export class InferenceRouter {
     const { messages, taskType, tier, sessionId, turnId, tools } = request;
 
     // 1. Select model from routing matrix
-    const model = this.selectModel(tier, taskType);
+    const model = request.modelId ? this.registry.get(request.modelId) : this.selectModel(tier, taskType);
+    if (request.modelId && (!model || !model.enabled)) throw new Error("Configured inference model unavailable; refusing provider fallback");
     if (!model) {
       return {
         content: "",
@@ -69,9 +70,11 @@ export class InferenceRouter {
     );
 
     const budgetCheck = this.budget.checkBudget(estimatedCostCents, model.modelId);
-    if (!budgetCheck.allowed) {
+    const dailyExceeded = request.dailyBudgetCents !== undefined &&
+      (request.dailyBudgetCents <= 0 || this.budget.getDailyCost() + estimatedCostCents > request.dailyBudgetCents);
+    if (!budgetCheck.allowed || dailyExceeded) {
       return {
-        content: `Budget exceeded: ${budgetCheck.reason}`,
+        content: `Budget exceeded: ${dailyExceeded ? "daily inference limit" : budgetCheck.reason}`,
         model: model.modelId,
         provider: model.provider,
         inputTokens: 0,

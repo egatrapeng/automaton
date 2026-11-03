@@ -1,3 +1,4 @@
+import { isStandalone, standaloneTools, standaloneModel, validateStandalone } from "../security/standalone.js";
 /**
  * The Agent Loop
  *
@@ -99,7 +100,8 @@ export async function runAgentLoop(
   const { identity, config, db, conway, inference, social, skills, policyEngine, spendTracker, onStateChange, onTurnComplete, ollamaBaseUrl } =
     options;
 
-  const builtinTools = createBuiltinTools(identity.sandboxId);
+  validateStandalone(config);
+  const builtinTools = isStandalone(config) ? standaloneTools(createBuiltinTools(identity.sandboxId)) : createBuiltinTools(identity.sandboxId);
   const installedTools = loadInstalledTools(db);
   const tools = [...builtinTools, ...installedTools];
   const toolContext: ToolContext = {
@@ -118,6 +120,7 @@ export async function runAgentLoop(
   };
   const modelRegistry = new ModelRegistry(db.raw);
   modelRegistry.initialize();
+  if (isStandalone(config)) modelRegistry.upsert(standaloneModel(config));
 
   // Discover Ollama models if configured
   if (ollamaBaseUrl) {
@@ -132,7 +135,7 @@ export async function runAgentLoop(
   let orchestrator: Orchestrator | undefined;
   let workerPool: LocalWorkerPool | undefined;
 
-  if (hasTable(db.raw, "goals")) {
+  if (!isStandalone(config) && hasTable(db.raw, "goals")) {
     try {
       planModeController = new PlanModeController(db.raw);
 
@@ -368,7 +371,7 @@ export async function runAgentLoop(
   onStateChange?.("waking");
 
   // Get financial state
-  let financial = await getFinancialState(conway, identity.address, db, config.chainType || identity.chainType || "evm");
+  let financial = await getFinancialState(conway, identity.address, db, config.chainType || identity.chainType || "evm", isStandalone(config));
 
   // Check if this is the first run
   const isFirstRun = db.getTurnCount() === 0;
@@ -440,12 +443,15 @@ export async function runAgentLoop(
       }
 
       // Refresh financial state periodically
-      financial = await getFinancialState(conway, identity.address, db, config.chainType || identity.chainType || "evm");
+      financial = await getFinancialState(conway, identity.address, db, config.chainType || identity.chainType || "evm", isStandalone(config));
 
       // Check survival tier
       // api_unreachable: creditsCents === -1 means API failed with no cache.
       // Do NOT kill the agent; continue in low-compute mode and retry next tick.
-      if (financial.creditsCents === -1) {
+      if (isStandalone(config)) {
+        db.setAgentState("running");
+        inference.setLowComputeMode(false);
+      } else if (financial.creditsCents === -1) {
         log(config, "[API_UNREACHABLE] Balance API unreachable, continuing in low-compute mode.");
         inference.setLowComputeMode(true);
       } else {
@@ -476,7 +482,7 @@ export async function runAgentLoop(
                 log(config, `[AUTO-TOPUP] Bought $${topupResult.amountUsd} credits from USDC mid-loop`);
                 // Re-fetch financial state after topup so the rest of
                 // the turn sees the updated balance.
-                financial = await getFinancialState(conway, identity.address, db, config.chainType || identity.chainType || "evm");
+                financial = await getFinancialState(conway, identity.address, db, config.chainType || identity.chainType || "evm", isStandalone(config));
               }
             } catch (err: any) {
               logger.warn(`Inline auto-topup failed: ${err.message}`);
@@ -614,7 +620,7 @@ export async function runAgentLoop(
       pendingInput = undefined;
 
       // ── Inference Call (via router when available) ──
-      const survivalTier = getSurvivalTier(financial.creditsCents);
+      const survivalTier = isStandalone(config) ? "normal" : getSurvivalTier(financial.creditsCents);
       log(config, `[THINK] Routing inference (tier: ${survivalTier}, model: ${inference.getDefaultModel()})...`);
 
       const inferenceTools = toolsToInferenceFormat(tools);
@@ -622,12 +628,15 @@ export async function runAgentLoop(
         {
           messages: messages,
           taskType: "agent_turn",
+          modelId: isStandalone(config) ? config.inferenceModel : undefined,
+          dailyBudgetCents: isStandalone(config) ? config.treasuryPolicy?.maxInferenceDailyCents ?? 100 : undefined,
+          maxTokens: isStandalone(config) ? config.maxTokensPerTurn : undefined,
           tier: survivalTier,
           sessionId: db.getKV("session_id") || "default",
           turnId: ulid(),
           tools: inferenceTools,
         },
-        (msgs, opts) => inference.chat(msgs, { ...opts, tools: inferenceTools }),
+        (msgs, opts) => inference.chat(isStandalone(config) ? messages : msgs, { ...opts, tools: inferenceTools }),
       );
 
       // Build a compatible response for the rest of the loop
@@ -967,7 +976,9 @@ async function getFinancialState(
   address: string,
   db?: AutomatonDatabase,
   chainType?: string,
+  standalone = false,
 ): Promise<FinancialState> {
+  if (standalone) return { creditsCents: 0, usdcBalance: 0, lastChecked: new Date().toISOString() };
   let creditsCents = _lastKnownCredits;
   let usdcBalance = _lastKnownUsdc;
 

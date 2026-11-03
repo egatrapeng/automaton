@@ -663,7 +663,7 @@ Your chain type is ${chainType}.`,
   }
 
   // Layer 6: Operational Context
-  sections.push(OPERATIONAL_CONTEXT);
+  sections.push(config.runtimeMode === "standalone" ? "You administer a dedicated host. Inference is billed directly to Anthropic, not Conway credits. Conway services and remote paid replication are unavailable. Do not provision, fund, seek Conway credits or claim the agent is dead because Conway balance is zero. Use local shell, files, git, skills and memory for the creator task. API usage is paid by the operator; conserve tokens and respect configured budgets." : OPERATIONAL_CONTEXT);
 
   // Layer 7: Dynamic Context
   const turnCount = db.getTurnCount();
@@ -709,7 +709,7 @@ Your chain type is ${chainType}.`,
   }
 
   // Compute survival tier
-  const survivalTier = financial.creditsCents > 50 ? "normal"
+  const survivalTier = config.runtimeMode === "standalone" ? "external_provider" : financial.creditsCents > 50 ? "normal"
     : financial.creditsCents > 10 ? "low_compute"
     : financial.creditsCents > 0 ? "critical"
     : "dead";
@@ -718,7 +718,7 @@ Your chain type is ${chainType}.`,
   sections.push(
     `--- CURRENT STATUS ---
 State: ${state}
-Credits: $${(financial.creditsCents / 100).toFixed(2)}
+Credits: ${config.runtimeMode === "standalone" ? "Not applicable; billed directly to Anthropic" : "$" + (financial.creditsCents / 100).toFixed(2)}
 Survival tier: ${survivalTier}${uptimeLine}
 Total turns completed: ${turnCount}
 Recent self-modifications: ${recentMods.length}
@@ -800,6 +800,7 @@ export function buildWakeupPrompt(params: {
 }): string {
   const { identity, config, financial, db } = params;
   const turnCount = db.getTurnCount();
+  if (config.runtimeMode === "standalone") return `Resume ${config.name} on its dedicated host. Inference is provided directly by Anthropic. No Conway credit balance is required or available. Review pending creator tasks, preserve data, and perform useful work within the configured budget.`;
 
   const chainType = config.chainType || "evm";
   const usdcNetwork = chainType === "solana" ? "Solana" : "Base";

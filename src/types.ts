@@ -41,6 +41,8 @@ export interface ProvisionResult {
 // ─── Configuration ───────────────────────────────────────────────
 
 export interface AutomatonConfig {
+  /** Host runtime billed directly by Anthropic; no Conway account required. */
+  runtimeMode?: "conway" | "standalone";
   name: string;
   genesisPrompt: string;
   creatorMessage?: string;
@@ -1202,6 +1204,9 @@ export interface ModelPreference {
 export type RoutingMatrix = Record<SurvivalTier, Record<InferenceTaskType, ModelPreference>>;
 
 export interface InferenceRequest {
+  /** Operator-selected model, with no fallback to another provider. */
+  modelId?: string;
+  dailyBudgetCents?: number;
   messages: ChatMessage[];
   taskType: InferenceTaskType;
   tier: SurvivalTier;
