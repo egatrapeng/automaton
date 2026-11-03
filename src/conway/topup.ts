@@ -14,7 +14,7 @@
  */
 
 import type { PrivateKeyAccount, Address } from "viem";
-import { x402Fetch, getUsdcBalance } from "./x402.js";
+import { x402Fetch, getUsdcBalance, getUsdcBalanceDetailed, type PaymentSecurityOptions, type X402PaymentResult } from "./x402.js";
 import { createLogger } from "../observability/logger.js";
 import type { ChainType } from "../identity/chain.js";
 
@@ -28,6 +28,7 @@ export interface TopupResult {
   amountUsd: number;
   creditsCentsAdded?: number;
   error?: string;
+  payment?: X402PaymentResult["payment"];
 }
 
 /**
@@ -41,13 +42,25 @@ export async function topupCredits(
   account: PrivateKeyAccount,
   amountUsd: number,
   recipientAddress?: Address,
+  security: PaymentSecurityOptions = {},
 ): Promise<TopupResult> {
+  if (!TOPUP_TIERS.includes(amountUsd)) return { success: false, amountUsd, error: "Invalid topup tier" };
+  // A separately configured USDC reserve must use a verified atomic wallet balance.
+  if ((security.budget?.minimumReserveCents ?? 0) > 0 && security.budget?.balanceAtomic === undefined) {
+    const balance = await getUsdcBalanceDetailed(account.address, "eip155:8453");
+    if (!balance.ok || balance.balanceAtomic === undefined) {
+      return { success: false, amountUsd, error: "Cannot enforce USDC reserve: wallet balance unavailable" };
+    }
+    security = { ...security, budget: { ...security.budget, balanceAtomic: BigInt(balance.balanceAtomic) } };
+  }
   const address = recipientAddress || account.address;
   const url = `${apiUrl}/pay/${amountUsd}/${address}`;
 
   logger.info(`Attempting credit topup: $${amountUsd} USD for ${address}`);
 
-  const result = await x402Fetch(url, account, "GET");
+  const result = await x402Fetch(url, account, "GET", undefined, undefined, amountUsd * 100, "evm", {
+    networkPolicy: "configured", ...security, expectedNetwork: "eip155:8453",
+  });
 
   if (!result.success) {
     logger.error(`Credit topup failed: ${result.error}`);
@@ -55,6 +68,7 @@ export async function topupCredits(
       success: false,
       amountUsd,
       error: result.error || `HTTP ${result.status}`,
+      payment: result.payment,
     };
   }
 
@@ -68,6 +82,7 @@ export async function topupCredits(
     success: true,
     amountUsd,
     creditsCentsAdded,
+    payment: result.payment,
   };
 }
 
@@ -83,6 +98,7 @@ export async function topupForSandbox(params: {
   account: PrivateKeyAccount;
   error: Error & { status?: number; responseText?: string };
   chainType?: ChainType;
+  paymentSecurity?: PaymentSecurityOptions;
 }): Promise<TopupResult | null> {
   const { apiUrl, account, error, chainType } = params;
 
@@ -134,7 +150,7 @@ export async function topupForSandbox(params: {
   }
 
   logger.info(`Sandbox topup: deficit=${deficitCents}c, buying $${selectedTier} tier`);
-  return topupCredits(apiUrl, account, selectedTier);
+  return topupCredits(apiUrl, account, selectedTier, undefined, params.paymentSecurity);
 }
 
 /**
@@ -151,6 +167,7 @@ export async function bootstrapTopup(params: {
   creditsCents: number;
   creditThresholdCents?: number;
   chainType?: ChainType;
+  paymentSecurity?: PaymentSecurityOptions;
 }): Promise<TopupResult | null> {
   const { apiUrl, account, creditsCents, creditThresholdCents = 500, chainType } = params;
 
@@ -188,5 +205,5 @@ export async function bootstrapTopup(params: {
     `Bootstrap topup: credits=$${(creditsCents / 100).toFixed(2)}, USDC=$${usdcBalance.toFixed(2)}, buying $${minTier}`,
   );
 
-  return topupCredits(apiUrl, account, minTier);
+  return topupCredits(apiUrl, account, minTier, undefined, params.paymentSecurity);
 }

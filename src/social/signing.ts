@@ -22,6 +22,13 @@ export const MESSAGE_LIMITS = {
   maxOutboundPerHour: 100,
 } as const;
 
+/** Canonical format already used by the Conway relay; do not add unsigned fields. */
+export function canonicalSendMessage(to: string, content: string, signedAt: string): string {
+  // EVM addresses are case insensitive. Base58 Solana addresses are not.
+  const recipient = /^0x[a-fA-F0-9]{40}$/.test(to) ? to.toLowerCase() : to;
+  return `Conway:send:${recipient}:${keccak256(toBytes(content))}:${signedAt}`;
+}
+
 /**
  * Sign a send message payload.
  *
@@ -42,16 +49,11 @@ export async function signSendPayload(
   }
 
   const signedAt = new Date().toISOString();
-  const contentHash = keccak256(toBytes(content));
-
   // Solana addresses are case-sensitive (base58); only lowercase EVM addresses
-  // Solana addresses are case-sensitive (base58); only lowercase EVM addresses
-  const isSolana = "signMessage" in signer && "chainType" in signer
-    && (signer as ChainIdentity).chainType === "solana";
   const { detectChainType } = await import("../identity/chain.js");
   const recipientChainType = detectChainType(to);
   const normalizedTo = recipientChainType === "solana" ? to : to.toLowerCase();
-  const canonical = `Conway:send:${normalizedTo}:${contentHash}:${signedAt}`;
+  const canonical = canonicalSendMessage(normalizedTo, content, signedAt);
 
   let signature: string;
   let fromAddress: string;

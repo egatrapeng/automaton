@@ -72,6 +72,7 @@ import type {
 } from "../types.js";
 import { ulid } from "ulid";
 import { createLogger } from "../observability/logger.js";
+import { redactText, redactValue } from "../security/redaction.js";
 
 const logger = createLogger("database");
 
@@ -140,10 +141,10 @@ export function createDatabase(dbPath: string): AutomatonDatabase {
       turn.id,
       turn.timestamp,
       turn.state,
-      turn.input ?? null,
+      turn.input != null ? redactText(turn.input) : null,
       turn.inputSource ?? null,
-      turn.thinking,
-      JSON.stringify(turn.toolCalls),
+      redactText(turn.thinking),
+      JSON.stringify(redactValue(turn.toolCalls)),
       JSON.stringify(turn.tokenUsage),
       turn.costCents,
     );
@@ -185,10 +186,10 @@ export function createDatabase(dbPath: string): AutomatonDatabase {
       call.id,
       turnId,
       call.name,
-      JSON.stringify(call.arguments),
-      call.result,
+      JSON.stringify(redactValue(call.arguments)),
+      redactText(call.result),
       call.durationMs,
-      call.error ?? null,
+      call.error != null ? redactText(call.error) : null,
     );
   };
 

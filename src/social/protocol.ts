@@ -10,10 +10,12 @@
 import crypto from "crypto";
 import { ulid } from "ulid";
 import {
-  keccak256,
-  toBytes,
   verifyMessage,
 } from "viem";
+import nacl from "tweetnacl";
+import bs58 from "bs58";
+import { detectChainType } from "../identity/chain.js";
+import { canonicalSendMessage } from "./signing.js";
 
 /**
  * A fully signed social message.
@@ -43,7 +45,7 @@ export function createNonce(): string {
 }
 
 /**
- * Verify an ECDSA secp256k1 message signature.
+ * Verify the relay's canonical EVM or Solana send signature locally.
  *
  * Reconstructs the canonical string used during signing and verifies
  * the signature against the expected sender address.
@@ -53,8 +55,16 @@ export async function verifyMessageSignature(
   expectedFrom: string,
 ): Promise<boolean> {
   try {
-    const contentHash = keccak256(toBytes(message.content));
-    const canonical = `Conway:send:${message.to.toLowerCase()}:${contentHash}:${message.signed_at}`;
+    const chain = detectChainType(expectedFrom);
+    const canonical = canonicalSendMessage(message.to, message.content, message.signed_at);
+
+    if (chain === "solana") {
+      const signature = bs58.decode(message.signature);
+      const publicKey = bs58.decode(expectedFrom);
+      return signature.length === nacl.sign.signatureLength &&
+        nacl.sign.detached.verify(new TextEncoder().encode(canonical), signature, publicKey);
+    }
+    if (chain !== "evm") return false;
 
     const valid = await verifyMessage({
       address: expectedFrom as `0x${string}`,

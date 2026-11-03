@@ -47,6 +47,8 @@ export interface AutomatonConfig {
   creatorAddress: string;
   registeredWithConway: boolean;
   sandboxId: string;
+  /** Explicit execution target. Host administration is not an isolation boundary. */
+  execution?: ExecutionConfig;
   conwayApiUrl: string;
   conwayApiKey: string;
   openaiApiKey?: string;
@@ -75,6 +77,18 @@ export interface AutomatonConfig {
   rpcUrl?: string;
   /** Chain type for this automaton. Defaults to "evm" if absent. */
   chainType?: ChainType;
+}
+
+export interface ExecutionConfig {
+  mode: "host" | "remote";
+  workingDirectory?: string;
+  /** Additional non-secret variable names explicitly forwarded to local tools. */
+  environmentAllowlist?: string[];
+  maxTimeoutMs?: number;
+  maxOutputBytes?: number;
+  /** Optional file API roots; these do not restrict a host-administration shell. */
+  readRoots?: string[];
+  writeRoots?: string[];
 }
 
 export const DEFAULT_CONFIG: Partial<AutomatonConfig> = {
@@ -117,6 +131,7 @@ export interface AgentTurn {
 
 export type InputSource =
   | "heartbeat"
+  | "external"
   | "creator"
   | "agent"
   | "system"
@@ -164,6 +179,9 @@ export type ToolCategory =
   | "memory";
 
 export interface ToolContext {
+  /** Set by the execution pipeline, never by tool arguments. */
+  inputSource?: InputSource;
+  recordPayment?: (payment: { amountCents: number; recipient: string; domain?: string }) => void;
   identity: AutomatonIdentity;
   config: AutomatonConfig;
   db: AutomatonDatabase;
@@ -574,6 +592,12 @@ export interface TreasuryPolicy {
   minimumReserveCents: number;
   maxX402PaymentCents: number;
   x402AllowedDomains: string[];
+  maxX402HourlyCents?: number;
+  maxX402DailyCents?: number;
+  maxX402DestinationDailyCents?: number;
+  /** Separate USDC reserve; minimumReserveCents applies to Conway credits. */
+  minimumUsdcReserveCents?: number;
+  x402AllowedRecipients?: string[];
   transferCooldownMs: number;
   maxTransfersPerTurn: number;
   maxInferenceDailyCents: number;

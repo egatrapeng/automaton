@@ -14,6 +14,7 @@ import type { ProvisionResult } from "../types.js";
 import { ResilientHttpClient } from "../conway/http-client.js";
 import type { ChainIdentity } from "./chain.js";
 import { buildSiwsMessage, signSiwsMessage } from "./siws.js";
+import { registerSecret, redactText } from "../security/redaction.js";
 
 const httpClient = new ResilientHttpClient();
 
@@ -27,6 +28,7 @@ export function loadApiKeyFromConfig(): string | null {
   if (!fs.existsSync(configPath)) return null;
   try {
     const config = JSON.parse(fs.readFileSync(configPath, "utf-8"));
+    registerSecret(config.apiKey);
     return config.apiKey || null;
   } catch {
     return null;
@@ -37,6 +39,7 @@ export function loadApiKeyFromConfig(): string | null {
  * Save API key and wallet address to ~/.automaton/config.json
  */
 function saveConfig(apiKey: string, walletAddress: string): void {
+  registerSecret(apiKey);
   const dir = getAutomatonDir();
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
@@ -79,7 +82,7 @@ export async function provision(
   });
   if (!nonceResp.ok) {
     throw new Error(
-      `Failed to get nonce: ${nonceResp.status} ${await nonceResp.text()}`,
+      redactText(`Failed to get nonce: ${nonceResp.status} ${await nonceResp.text()}`),
     );
   }
   const { nonce } = (await nonceResp.json()) as { nonce: string };
@@ -132,13 +135,14 @@ export async function provision(
   if (!verifyResp.ok) {
     const protocol = isSolana ? "SIWS" : "SIWE";
     throw new Error(
-      `${protocol} verification failed: ${verifyResp.status} ${await verifyResp.text()}`,
+      redactText(`${protocol} verification failed: ${verifyResp.status} ${await verifyResp.text()}`),
     );
   }
 
   const { access_token } = (await verifyResp.json()) as {
     access_token: string;
   };
+  registerSecret(access_token);
 
   // 5. Create API key
   const keyResp = await httpClient.request(`${url}/v1/auth/api-keys`, {
@@ -152,7 +156,7 @@ export async function provision(
 
   if (!keyResp.ok) {
     throw new Error(
-      `Failed to create API key: ${keyResp.status} ${await keyResp.text()}`,
+      redactText(`Failed to create API key: ${keyResp.status} ${await keyResp.text()}`),
     );
   }
 
@@ -193,7 +197,7 @@ export async function registerParent(
   // Endpoint may not exist yet -- fail gracefully
   if (!resp.ok && resp.status !== 404) {
     throw new Error(
-      `Failed to register parent: ${resp.status} ${await resp.text()}`,
+      redactText(`Failed to register parent: ${resp.status} ${await resp.text()}`),
     );
   }
 }

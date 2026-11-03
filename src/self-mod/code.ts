@@ -5,7 +5,7 @@
  * All changes are audited, rate-limited, and some paths are protected.
  *
  * Safety model inspired by nanoclaw's trust boundary architecture:
- * - Hard-coded invariants that can NEVER be modified by the agent
+ * - Application guards for protected runtime files (not OS isolation)
  * - The safety enforcement code is immutable from the agent's perspective
  * - Pre-modification snapshots via git
  * - Rate limiting on modification frequency
@@ -22,9 +22,8 @@ import type {
 import { logModification } from "./audit-log.js";
 
 // ─── IMMUTABLE SAFETY INVARIANTS ─────────────────────────────
-// These are hard-coded and CANNOT be changed by the agent.
-// The agent cannot modify this file (it's in PROTECTED_FILES).
-// Even if it modifies a copy, the runtime loads from the original.
+// These checks protect the file/self-edit APIs. An unrestricted host shell
+// with this user's privileges can still replace code; do not claim immutability.
 
 /**
  * Files that the automaton cannot modify under any circumstances.
@@ -42,6 +41,10 @@ const PROTECTED_FILES: readonly string[] = Object.freeze([
   "state.db",
   "state.db-wal",
   "state.db-shm",
+  "payment-ledger.db",
+  "payment-ledger.db-wal",
+  "payment-ledger.db-shm",
+  "payment-ledger.db-journal",
   // Constitution (immutable, propagated to children)
   "constitution.md",
   // Defense infrastructure (the agent must not modify its own guardrails)
@@ -76,6 +79,22 @@ const PROTECTED_FILES: readonly string[] = Object.freeze([
   "agent/policy-engine.js",
   "agent/policy-rules/index.ts",
   "agent/policy-rules/index.js",
+  "security/execution.ts",
+  "security/execution.js",
+  "security/files.ts",
+  "security/files.js",
+  "security/redaction.ts",
+  "security/redaction.js",
+  "security/network.ts",
+  "security/network.js",
+  "security/payment-options.ts",
+  "security/payment-options.js",
+  "security/input-provenance.ts",
+  "security/input-provenance.js",
+  "conway/payment-ledger.ts",
+  "conway/payment-ledger.js",
+  "conway/x402.ts",
+  "conway/x402.js",
 ]);
 
 /**

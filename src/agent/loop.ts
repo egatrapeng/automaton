@@ -65,6 +65,9 @@ import { createWorkerInferenceBridge } from "./worker-inference-bridge.js";
 import { ProviderRegistry } from "../inference/provider-registry.js";
 import { UnifiedInferenceClient } from "../inference/inference-client.js";
 import { isIdleOnlyTool } from "./idle-only-tools.js";
+import { delegatedInputSource } from "../security/input-provenance.js";
+import { redactText, redactValue } from "../security/redaction.js";
+import { paymentOptionsFor } from "../security/payment-options.js";
 
 const logger = createLogger("loop");
 const MAX_TOOL_CALLS_PER_TURN = 10;
@@ -220,7 +223,13 @@ export async function runAgentLoop(
         },
         config: {
           ...config,
+          spawnLocalAgent: (task: any) => initializedWorkerPool.spawn(task),
           spawnAgent: async (task: any) => {
+            // External tasks retain delegation through local workers, but do
+            // not authorize paid creation of remote child sandboxes.
+            if (delegatedInputSource(db.raw, task.goalId) === "external") {
+              return initializedWorkerPool.spawn(task);
+            }
             // Try Conway sandbox spawn first (production)
             try {
               const { generateGenesisConfig } = await import("../replication/genesis.js");
@@ -261,6 +270,7 @@ export async function runAgentLoop(
                       account: identity.account,
                       error: sandboxError,
                       chainType: config.chainType || identity.chainType || "evm",
+                      paymentSecurity: paymentOptionsFor(config),
                     });
 
                     if (topupResult?.success) {
@@ -384,6 +394,9 @@ export async function runAgentLoop(
 
   const maxCycleTurns = config.maxTurnsPerCycle ?? 25;
   let cycleTurnCount = 0;
+  // Follow-up turns retain external policy authority, including synthetic
+  // system feedback generated later while processing an inbox task.
+  let externalContextActive = false;
 
   let pendingInput: { content: string; source: string } | undefined = {
     content: wakeupInput,
@@ -421,7 +434,8 @@ export async function runAgentLoop(
               return `[Message from ${from.content}]: ${content.content}`;
             })
             .join("\n\n");
-          pendingInput = { content: formatted, source: "agent" };
+          pendingInput = { content: formatted, source: "external" };
+          externalContextActive = true;
         }
       }
 
@@ -456,6 +470,7 @@ export async function runAgentLoop(
                 account: identity.account,
                 creditsCents: financial.creditsCents,
                 chainType: config.chainType || identity.chainType || "evm",
+                paymentSecurity: paymentOptionsFor(config),
               });
               if (topupResult?.success) {
                 log(config, `[AUTO-TOPUP] Bought $${topupResult.amountUsd} credits from USDC mid-loop`);
@@ -493,6 +508,9 @@ export async function runAgentLoop(
       // Build context — filter out purely idle turns (only status checks)
       // to prevent the model from continuing a status-check pattern
       const allTurns = db.getRecentTurns(20);
+      if (allTurns.some((turn) => turn.inputSource === "external")) {
+        externalContextActive = true;
+      }
       const meaningfulTurns = allTurns.filter((t) => {
         if (t.toolCalls.length === 0) return true; // text-only turns are meaningful
         return t.toolCalls.some((tc) => !isIdleOnlyTool(tc.name));
@@ -640,7 +658,8 @@ export async function runAgentLoop(
       if (response.toolCalls && response.toolCalls.length > 0) {
         const toolCallMessages: any[] = [];
         let callCount = 0;
-        const currentInputSource = currentInput?.source as InputSource | undefined;
+        const currentInputSource = externalContextActive
+          ? "external" : currentInput?.source as InputSource | undefined;
 
         for (const tc of response.toolCalls) {
           if (callCount >= MAX_TOOL_CALLS_PER_TURN) {
@@ -656,7 +675,7 @@ export async function runAgentLoop(
             args = {};
           }
 
-          log(config, `[TOOL] ${tc.function.name}(${JSON.stringify(args).slice(0, 100)})`);
+          log(config, `[TOOL] ${tc.function.name}(${JSON.stringify(redactValue(args)).slice(0, 100)})`);
 
           const result = await executeTool(
             tc.function.name,
@@ -677,7 +696,7 @@ export async function runAgentLoop(
 
           log(
             config,
-            `[TOOL RESULT] ${tc.function.name}: ${result.error ? `ERROR: ${result.error}` : result.result.slice(0, 200)}`,
+            `[TOOL RESULT] ${tc.function.name}: ${result.error ? `ERROR: ${redactText(result.error)}` : redactText(result.result).slice(0, 200)}`,
           );
 
           callCount++;
@@ -816,7 +835,7 @@ export async function runAgentLoop(
 
       // Log the turn
       if (turn.thinking) {
-        log(config, `[THOUGHT] ${turn.thinking.slice(0, 300)}`);
+        log(config, `[THOUGHT] ${redactText(turn.thinking).slice(0, 300)}`);
       }
 
       // ── Check for sleep command ──

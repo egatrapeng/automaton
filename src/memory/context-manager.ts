@@ -8,6 +8,11 @@ import { getEncoding, type Tiktoken } from "js-tiktoken";
 import type { ChatMessage } from "../types.js";
 
 const MAX_TOKEN_CACHE_SIZE = 10_000;
+/** Bound synchronous BPE work. Repetitive long strings can make it quadratic. */
+export const MAX_EXACT_TOKENIZATION_BYTES = 4_096;
+/** Approximate retained key storage (UTF-16), excluding Map bookkeeping. */
+export const MAX_TOKEN_CACHE_BYTES = 2 * 1024 * 1024;
+const MAX_CACHE_MODEL_CHARS = 512;
 const DEFAULT_RESERVE_TOKENS = 4_096;
 const COMPRESSION_HEADROOM_RATIO = 0.1;
 const MAX_EVENT_CONTENT_CHARS = 220;
@@ -116,52 +121,71 @@ interface RenderedTurn extends RenderedBundle {
   turnIndex: number;
 }
 
-function enforceLruLimit(cache: Map<string, number>): void {
-  if (cache.size <= MAX_TOKEN_CACHE_SIZE) return;
-  const oldestKey = cache.keys().next().value;
-  if (oldestKey !== undefined) {
-    cache.delete(oldestKey);
-  }
+function formatCacheKey(text: string, model?: string): string {
+  // A separator alone is ambiguous if either field contains that separator.
+  return JSON.stringify([model ?? null, text]);
 }
 
-function formatCacheKey(text: string, model?: string): string {
-  return `${model ?? "default"}::${text}`;
+let sharedEncoder: Tiktoken | null | undefined;
+
+function getSharedEncoder(): Tiktoken | null {
+  if (sharedEncoder === undefined) {
+    try {
+      sharedEncoder = getEncoding("cl100k_base");
+    } catch {
+      sharedEncoder = null;
+    }
+  }
+  return sharedEncoder;
 }
 
 export function createTokenCounter(): TokenCounter {
   const cache = new Map<string, number>();
-  let encoder: Tiktoken | null = null;
-
-  try {
-    encoder = getEncoding("cl100k_base");
-  } catch {
-    encoder = null;
-  }
+  let retainedKeyBytes = 0;
 
   const countTokens = (text: string, model?: string): number => {
     const normalizedText = text ?? "";
-    const key = formatCacheKey(normalizedText, model);
+    const utf8Bytes = Buffer.byteLength(normalizedText, "utf8");
 
-    const cached = cache.get(key);
+    // cl100k is a byte-level BPE: it cannot use more tokens than input bytes.
+    // This bound deliberately overestimates long text rather than permitting
+    // attacker-controlled input to monopolize the event loop or under-budget
+    // Unicode text. Do not retain large strings in the cache either.
+    if (utf8Bytes > MAX_EXACT_TOKENIZATION_BYTES) return utf8Bytes;
+
+    const cacheable = (model?.length ?? 0) <= MAX_CACHE_MODEL_CHARS;
+    const key = cacheable ? formatCacheKey(normalizedText, model) : undefined;
+
+    const cached = key === undefined ? undefined : cache.get(key);
     if (cached !== undefined) {
-      cache.delete(key);
-      cache.set(key, cached);
+      cache.delete(key!);
+      cache.set(key!, cached);
       return cached;
     }
 
     let count: number;
+    const encoder = getSharedEncoder();
     if (encoder) {
       try {
-        count = encoder.encode(normalizedText).length;
+        // Treat strings resembling special tokens as ordinary untrusted text.
+        count = encoder.encode(normalizedText, [], []).length;
       } catch {
-        count = Math.ceil(normalizedText.length / 3.5);
+        count = utf8Bytes;
       }
     } else {
-      count = Math.ceil(normalizedText.length / 3.5);
+      count = utf8Bytes;
     }
 
-    cache.set(key, count);
-    enforceLruLimit(cache);
+    if (key !== undefined) {
+      cache.set(key, count);
+      retainedKeyBytes += key.length * 2;
+      while (cache.size > MAX_TOKEN_CACHE_SIZE || retainedKeyBytes > MAX_TOKEN_CACHE_BYTES) {
+        const oldestKey = cache.keys().next().value;
+        if (oldestKey === undefined) break;
+        retainedKeyBytes -= oldestKey.length * 2;
+        cache.delete(oldestKey);
+      }
+    }
     return count;
   };
 

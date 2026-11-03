@@ -200,6 +200,7 @@ describe("getRegisteredAgentsByEvents", () => {
 // ─── discoverAgents Integration Tests ───────────────────────────
 
 describe("discoverAgents", () => {
+  const card = "data:application/json;base64," + Buffer.from(JSON.stringify({ name: "Test agent", type: "test" })).toString("base64");
   beforeEach(() => {
     vi.clearAllMocks();
   });
@@ -210,7 +211,7 @@ describe("discoverAgents", () => {
     let callCount = 0;
     mockReadContract.mockImplementation(async (params: any) => {
       if (params.functionName === "totalSupply") return BigInt(3);
-      if (params.functionName === "tokenURI") return `https://example.com/agent${callCount++}.json`;
+      if (params.functionName === "tokenURI") { callCount++; return card; }
       if (params.functionName === "ownerOf") return "0xOwner";
       throw new Error(`Unexpected: ${params.functionName}`);
     });
@@ -232,7 +233,7 @@ describe("discoverAgents", () => {
     // Then event scanning kicks in
     mockReadContract.mockImplementation(async (params: any) => {
       if (params.functionName === "totalSupply") throw new Error("execution reverted");
-      if (params.functionName === "tokenURI") return "https://example.com/agent.json";
+      if (params.functionName === "tokenURI") return card;
       if (params.functionName === "ownerOf") throw new Error("execution reverted");
       throw new Error(`Unexpected: ${params.functionName}`);
     });
@@ -253,7 +254,7 @@ describe("discoverAgents", () => {
     expect(agents[0].agentId).toBe("18788");
     // Owner comes from event when ownerOf reverts and queryAgent returns empty owner
     expect(agents[0].owner).toBe("0xEventOwner");
-    expect(agents[0].agentURI).toBe("https://example.com/agent.json");
+    expect(agents[0].agentURI).toBe(card);
     // getLogs should have been called (event fallback)
     expect(mockGetLogs).toHaveBeenCalled();
   });

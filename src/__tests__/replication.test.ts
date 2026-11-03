@@ -20,6 +20,15 @@ import {
 } from "./mocks.js";
 import type { AutomatonDatabase, GenesisConfig } from "../types.js";
 import { MIGRATION_V7 } from "../state/schema.js";
+import { getRuntimeSource } from "../self-mod/runtime-source.js";
+
+// The parent repository may legitimately be under development during tests.
+// Use an explicit committed source fixture; dirty-source rejection is tested
+// separately and never creates a paid sandbox.
+vi.mock("../self-mod/runtime-source.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../self-mod/runtime-source.js")>();
+  return { ...actual, getRuntimeSource: vi.fn(() => ({ repositoryUrl: "https://github.com/operator/test-fork.git", commit: "a".repeat(40) })) };
+});
 
 // Mock fs for constitution propagation
 vi.mock("fs", async (importOriginal) => {
@@ -104,6 +113,7 @@ describe("spawnChild", () => {
   beforeEach(() => {
     conway = new MockConwayClient();
     db = createTestDb();
+    vi.mocked(getRuntimeSource).mockReturnValue({ repositoryUrl: "https://github.com/operator/test-fork.git", commit: "a".repeat(40) });
   });
 
   afterEach(() => {
@@ -123,6 +133,14 @@ describe("spawnChild", () => {
 
     expect(child.address).toBe(validAddress);
     expect(child.status).toBe("spawning");
+  });
+
+  it("refuses a dirty runtime snapshot before provisioning any paid sandbox", async () => {
+    vi.mocked(getRuntimeSource).mockImplementationOnce(() => { throw new Error("Runtime has uncommitted tracked changes. Review and commit before replication."); });
+    const create = vi.spyOn(conway, "createSandbox");
+    await expect(spawnChild(conway, identity, db, genesis)).rejects.toThrow(/uncommitted tracked changes/);
+    expect(create).not.toHaveBeenCalled();
+    expect(db.getChildren()).toHaveLength(0);
   });
 
   it("throws on zero address from init", async () => {

@@ -47,7 +47,7 @@ describe("agent/general-harness security", () => {
     rmSync(testRoot, { recursive: true, force: true });
   });
 
-  async function createHarness(conway: ConwayClient) {
+  async function createHarness(conway: ConwayClient, mode: "host" | "remote" = "host") {
     const harness = new GeneralHarness();
     const workspace = new AgentWorkspace("goal-test", path.join(testRoot, "workspace"));
     const context: HarnessContext = {
@@ -55,7 +55,7 @@ describe("agent/general-harness security", () => {
       allowedEditRoot: testRoot,
       workspace,
       identity: createTestIdentity(),
-      config: createTestConfig(),
+      config: createTestConfig({ execution: { mode } }),
       db,
       conway,
       inference: { chat: async () => ({ content: "done" }) },
@@ -178,5 +178,25 @@ describe("agent/general-harness security", () => {
     const out = await runTool(conway, "write_file", { path: filePath, content: "ok" });
     expect(out).toContain("Wrote 2 bytes");
     expect(readFileSync(filePath, "utf8")).toBe("ok");
+  });
+
+  it("does not change execution target or expose a host file on remote refusal", async () => {
+    const filePath = path.join(testRoot, "host-only.txt");
+    writeFileSync(filePath, "HOST_ONLY_MARKER");
+    const conway = createConwayStub({
+      readFile: async () => { throw new Error("remote refused"); },
+      writeFile: async () => { throw new Error("remote refused"); },
+      exec: async () => { throw new Error("remote refused"); },
+    });
+    const harness = await createHarness(conway, "remote");
+    const tools = harness.getToolDefs();
+    const read = await tools.find(tool => tool.name === "read_file")!.execute({ path: filePath });
+    expect(read).toContain("remote refused");
+    expect(read).not.toContain("HOST_ONLY_MARKER");
+    const write = await tools.find(tool => tool.name === "write_file")!.execute({ path: filePath, content: "BAD" });
+    expect(write).toContain("remote refused");
+    const exec = await tools.find(tool => tool.name === "exec")!.execute({ command: `printf BAD > '${filePath}'` });
+    expect(exec).toContain("remote refused");
+    expect(readFileSync(filePath, "utf8")).toBe("HOST_ONLY_MARKER");
   });
 });

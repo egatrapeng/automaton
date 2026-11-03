@@ -12,6 +12,7 @@ import { getAutomatonDir } from "./identity/wallet.js";
 import { loadApiKeyFromConfig } from "./identity/provision.js";
 import { createLogger } from "./observability/logger.js";
 import type { ChainType } from "./identity/chain.js";
+import { registerSecrets } from "./security/redaction.js";
 
 const logger = createLogger("config");
 const CONFIG_FILENAME = "automaton.json";
@@ -33,6 +34,7 @@ export function loadConfig(): AutomatonConfig | null {
   try {
     const raw = JSON.parse(fs.readFileSync(configPath, "utf-8"));
     const apiKey = raw.conwayApiKey || loadApiKeyFromConfig();
+    registerSecrets(apiKey, raw.openaiApiKey, raw.anthropicApiKey);
 
     // Deep-merge treasury policy with defaults
     const treasuryPolicy: TreasuryPolicy = {
@@ -42,12 +44,17 @@ export function loadConfig(): AutomatonConfig | null {
 
     // Validate all treasury values are positive numbers
     for (const [key, value] of Object.entries(treasuryPolicy)) {
-      if (key === "x402AllowedDomains") continue; // array, not number
-      if (typeof value === "number" && (value < 0 || !Number.isFinite(value))) {
-        logger.warn(`Invalid treasury value for ${key}: ${value}, using default`);
-        (treasuryPolicy as any)[key] = (DEFAULT_TREASURY_POLICY as any)[key];
+      if (key === "x402AllowedDomains" || key === "x402AllowedRecipients") continue;
+      if (typeof value !== "number" || value < 0 || !Number.isSafeInteger(value)) {
+        throw new Error(`Treasury field ${key} must be non-negative integer cents/counts`);
       }
     }
+
+    if (!Array.isArray(treasuryPolicy.x402AllowedDomains) || !treasuryPolicy.x402AllowedDomains.every((v) => typeof v === "string" && /^[a-zA-Z0-9.-]+$/.test(v))) {
+      throw new Error("Invalid x402 allowed domains");
+    }
+    if (treasuryPolicy.x402AllowedRecipients !== undefined && (!Array.isArray(treasuryPolicy.x402AllowedRecipients) || !treasuryPolicy.x402AllowedRecipients.every((v) => /^0x[0-9a-fA-F]{40}$/.test(v)))) throw new Error("Invalid x402 allowed recipients");
+    registerSecrets(apiKey, raw.openaiApiKey, raw.anthropicApiKey);
 
     // Deep-merge model strategy config with defaults
     const modelStrategy: ModelStrategyConfig = {
@@ -75,7 +82,7 @@ export function loadConfig(): AutomatonConfig | null {
       chainType: raw.chainType || "evm",
     } as AutomatonConfig;
   } catch {
-    return null;
+    throw new Error("Existing automaton configuration could not be loaded. Repair automaton.json; setup will not overwrite it.");
   }
 }
 
@@ -84,6 +91,7 @@ export function loadConfig(): AutomatonConfig | null {
  * Includes treasuryPolicy in the persisted config.
  */
 export function saveConfig(config: AutomatonConfig): void {
+  registerSecrets(config.conwayApiKey, config.openaiApiKey, config.anthropicApiKey);
   const dir = getAutomatonDir();
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
@@ -138,6 +146,7 @@ export function createConfig(params: {
     creatorAddress: params.creatorAddress,
     registeredWithConway: params.registeredWithConway,
     sandboxId: normalizedSandboxId,
+    execution: { mode: normalizedSandboxId ? "remote" : "host" },
     conwayApiUrl:
       DEFAULT_CONFIG.conwayApiUrl || "https://api.conway.tech",
     conwayApiKey: params.apiKey,

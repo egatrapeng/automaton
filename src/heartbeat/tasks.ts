@@ -23,6 +23,7 @@ import { getMetrics } from "../observability/metrics.js";
 import { AlertEngine, createDefaultAlertRules } from "../observability/alerts.js";
 import { metricsInsertSnapshot, metricsPruneOld } from "../state/database.js";
 import { ulid } from "ulid";
+import { paymentOptionsFor } from "../security/payment-options.js";
 
 const logger = createLogger("heartbeat.tasks");
 
@@ -174,6 +175,7 @@ export const BUILTIN_TASKS: Record<string, HeartbeatTaskFn> = {
         account: taskCtx.identity.account,
         creditsCents: credits,
         chainType: taskCtx.config.chainType || taskCtx.identity.chainType || "evm",
+        paymentSecurity: paymentOptionsFor(taskCtx.config),
       });
 
       if (result?.success) {

@@ -17,6 +17,7 @@ import { DEFAULT_DISCOVERY_CONFIG } from "../types.js";
 import { queryAgent, getTotalAgents, getRegisteredAgentsByEvents } from "./erc8004.js";
 import { keccak256, toBytes } from "viem";
 import { createLogger } from "../observability/logger.js";
+import { isInternalAddress, fetchWithPolicy } from "../security/network.js";
 const logger = createLogger("registry.discovery");
 
 type Network = "mainnet" | "testnet";
@@ -32,17 +33,7 @@ const DISCOVERY_TIMEOUT_MS = 60_000;
  *         192.168.0.0/16, 169.254.0.0/16, ::1, localhost, 0.0.0.0/8
  */
 export function isInternalNetwork(hostname: string): boolean {
-  const blocked = [
-    /^127\./,
-    /^10\./,
-    /^172\.(1[6-9]|2\d|3[01])\./,
-    /^192\.168\./,
-    /^169\.254\./,
-    /^::1$/,
-    /^localhost$/i,
-    /^0\./,
-  ];
-  return blocked.some(pattern => pattern.test(hostname));
+  return isInternalAddress(hostname);
 }
 
 /**
@@ -54,6 +45,7 @@ export function isAllowedUri(uri: string): boolean {
   try {
     const url = new URL(uri);
     if (!['https:', 'ipfs:'].includes(url.protocol)) return false;
+    if (url.username || url.password) return false;
     if (url.protocol === 'https:' && isInternalNetwork(url.hostname)) return false;
     return true;
   } catch {
@@ -291,6 +283,7 @@ export async function fetchAgentCard(
   // Handle data: URIs inline — no network request, no SSRF risk
   if (uri.startsWith("data:application/json,") || uri.startsWith("data:application/json;")) {
     try {
+      if (uri.length > cfg.maxCardSizeBytes * 6 + 256) return null;
       let json: string;
       if (uri.includes(";base64,")) {
         const b64 = uri.split(";base64,")[1];
@@ -298,7 +291,7 @@ export async function fetchAgentCard(
       } else {
         json = decodeURIComponent(uri.substring(uri.indexOf(",") + 1));
       }
-      if (json.length > cfg.maxCardSizeBytes) {
+      if (Buffer.byteLength(json, "utf-8") > cfg.maxCardSizeBytes) {
         logger.error(`data: URI agent card too large: ${json.length} bytes`);
         return null;
       }
@@ -323,37 +316,14 @@ export async function fetchAgentCard(
       fetchUrl = `${cfg.ipfsGateway}/ipfs/${uri.slice(7)}`;
     }
 
-    // Per-fetch timeout
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), cfg.fetchTimeoutMs);
-
-    try {
-      const response = await fetch(fetchUrl, {
-        signal: controller.signal,
-      });
-
-      if (!response.ok) return null;
-
-      // Phase 3.2: Check response size before parsing
-      const contentLength = response.headers.get("content-length");
-      if (contentLength && parseInt(contentLength, 10) > cfg.maxCardSizeBytes) {
-        logger.error(`Agent card too large: ${contentLength} bytes`);
-        return null;
-      }
-
-      const text = await response.text();
-      if (text.length > cfg.maxCardSizeBytes) {
-        logger.error(`Agent card too large: ${text.length} bytes`);
-        return null;
-      }
-
-      const data = JSON.parse(text);
-
-      // Validate agent card JSON against schema
-      return validateAgentCard(data);
-    } finally {
-      clearTimeout(timer);
-    }
+    const response = await fetchWithPolicy(fetchUrl, {}, {
+      publicOnly: true,
+      timeoutMs: cfg.fetchTimeoutMs,
+      maxResponseBytes: cfg.maxCardSizeBytes,
+      redirectPolicy: "public",
+    });
+    if (!response.ok) return null;
+    return validateAgentCard(JSON.parse(await response.text()));
   } catch (error) {
     logger.error("Agent card fetch failed:", error instanceof Error ? error : undefined);
     return null;

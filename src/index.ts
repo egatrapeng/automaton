@@ -34,6 +34,8 @@ import { DEFAULT_TREASURY_POLICY } from "./types.js";
 import { createLogger, setGlobalLogLevel, StructuredLogger } from "./observability/logger.js";
 import { prettySink } from "./observability/pretty-sink.js";
 import { bootstrapTopup } from "./conway/topup.js";
+import { paymentOptionsFor } from "./security/payment-options.js";
+import { resolveExecution } from "./security/execution.js";
 import { randomUUID } from "crypto";
 import { keccak256, toHex } from "viem";
 
@@ -192,6 +194,7 @@ async function run(): Promise<void> {
     const { runSetupWizard } = await import("./setup/wizard.js");
     config = await runSetupWizard();
   }
+  resolveExecution((config.sandboxId || "").trim(), config.execution);
 
   // Load wallet (chain-aware)
   const { account, chainIdentity, chainType: walletChainType } = await getWallet();
@@ -243,7 +246,11 @@ async function run(): Promise<void> {
     apiUrl: config.conwayApiUrl,
     apiKey,
     sandboxId: config.sandboxId,
+    execution: config.execution,
   });
+  if (config.execution?.mode === "host") {
+    logger.warn("Host administration mode: tools have this process's OS privileges. File guards and redaction are not a sandbox; keep this VPS dedicated.");
+  }
 
   // Register automaton identity (one-time, immutable)
   const registrationState = db.getIdentity("conwayRegistrationStatus");
@@ -352,6 +359,7 @@ async function run(): Promise<void> {
             account,
             creditsCents,
             chainType: resolvedChainType,
+            paymentSecurity: paymentOptionsFor(config),
           });
           if (topupResult?.success) {
             logger.info(

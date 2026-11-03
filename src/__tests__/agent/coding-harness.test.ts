@@ -49,7 +49,7 @@ describe("agent/CodingHarness confinement", () => {
     rmSync(testRoot, { recursive: true, force: true });
   });
 
-  async function createHarness(conway: ConwayClient) {
+  async function createHarness(conway: ConwayClient, mode: "host" | "remote" = "host") {
     const harness = new CodingHarness();
     const workspace = new AgentWorkspace("goal-coding", path.join(testRoot, "workspace"));
     const context: HarnessContext = {
@@ -57,7 +57,7 @@ describe("agent/CodingHarness confinement", () => {
       allowedEditRoot: testRoot,
       workspace,
       identity: createTestIdentity(),
-      config: createTestConfig(),
+      config: createTestConfig({ execution: { mode } }),
       db,
       conway,
       inference: { chat: async () => ({ content: "done" }) },
@@ -151,5 +151,23 @@ describe("agent/CodingHarness confinement", () => {
 
     expect(out).toContain("Patched");
     expect(readFileSync(filePath, "utf8")).toContain("'after'");
+  });
+
+  it("does not execute on the host when a remote command is refused", async () => {
+    const artifact = path.join(testRoot, "unexpected.txt");
+    const harness = await createHarness(createConwayStub({ exec: async () => { throw new Error("remote refused"); } }), "remote");
+    const tool = harness.getToolDefs().find(entry => entry.name === "exec")!;
+    expect(await tool.execute({ command: `printf BAD > '${artifact}'` })).toContain("remote refused");
+    expect(() => readFileSync(artifact)).toThrow();
+  });
+
+  it("does not read a host file when the remote read fails", async () => {
+    const filePath = path.join(testRoot, "local-only.txt");
+    writeFileSync(filePath, "LOCAL_MARKER_MUST_NOT_LEAK");
+    const harness = await createHarness(createConwayStub({ readFile: async () => { throw new Error("remote refused"); } }), "remote");
+    const tool = harness.getToolDefs().find(entry => entry.name === "read_file")!;
+    const result = await tool.execute({ path: filePath });
+    expect(result).toContain("remote refused");
+    expect(result).not.toContain("LOCAL_MARKER_MUST_NOT_LEAK");
   });
 });

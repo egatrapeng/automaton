@@ -6,9 +6,9 @@
  * Adapted from @aiws/sdk patterns.
  */
 
-import { execSync } from "child_process";
-import fs from "fs";
 import nodePath from "path";
+import { executeOnHost, resolveExecution } from "../security/execution.js";
+import { readToolFile, writeToolFile } from "../security/files.js";
 import type {
   ConwayClient,
   ExecResult,
@@ -21,6 +21,7 @@ import type {
   DomainRegistration,
   DnsRecord,
   ModelInfo,
+  ExecutionConfig,
 } from "../types.js";
 import { ResilientHttpClient } from "./http-client.js";
 import { ulid } from "ulid";
@@ -33,6 +34,7 @@ interface ConwayClientOptions {
   apiUrl: string;
   apiKey: string;
   sandboxId: string;
+  execution?: ExecutionConfig;
 }
 
 export function createConwayClient(options: ConwayClientOptions): ConwayClient {
@@ -40,6 +42,7 @@ export function createConwayClient(options: ConwayClientOptions): ConwayClient {
   // Normalize sandbox ID defensively so values like whitespace/"undefined"/"null"
   // never produce malformed API paths such as /v1/sandboxes//exec.
   const sandboxId = normalizeSandboxId(options.sandboxId);
+  const execution = resolveExecution(sandboxId, options.execution);
   const httpClient = new ResilientHttpClient();
 
   async function request(
@@ -104,33 +107,14 @@ export function createConwayClient(options: ConwayClientOptions): ConwayClient {
 
 
   // ─── Sandbox Operations (own sandbox) ────────────────────────
-  // When sandboxId is empty, automatically fall back to local execution.
-
-  const isLocal = !sandboxId;
-
-  const execLocal = (command: string, timeout?: number): ExecResult => {
-    try {
-      const stdout = execSync(command, {
-        timeout: timeout || 30_000,
-        encoding: "utf-8",
-        maxBuffer: 10 * 1024 * 1024,
-        cwd: process.env.HOME || "/root",
-      });
-      return { stdout: stdout || "", stderr: "", exitCode: 0 };
-    } catch (err: any) {
-      return {
-        stdout: err.stdout || "",
-        stderr: err.stderr || err.message || "",
-        exitCode: err.status ?? 1,
-      };
-    }
-  };
+  // Host administration must be selected explicitly. This is not an OS sandbox.
+  const isLocal = execution.mode === "host";
 
   const exec = async (
     command: string,
     timeout?: number,
   ): Promise<ExecResult> => {
-    if (isLocal) return execLocal(command, timeout);
+    if (isLocal) return executeOnHost(command, execution, timeout);
 
     // Remote sandboxes default to / as cwd. Wrap commands to run from /root
     // (matching local exec behavior) unless the command already sets a directory.
@@ -173,12 +157,7 @@ export function createConwayClient(options: ConwayClientOptions): ConwayClient {
     content: string,
   ): Promise<void> => {
     if (isLocal) {
-      const resolved = resolveLocalPath(filePath);
-      const dir = nodePath.dirname(resolved);
-      if (!fs.existsSync(dir)) {
-        fs.mkdirSync(dir, { recursive: true });
-      }
-      fs.writeFileSync(resolved, content, "utf-8");
+      writeToolFile(resolveLocalPath(filePath), content, execution.writeRoots);
       return;
     }
     try {
@@ -200,7 +179,7 @@ export function createConwayClient(options: ConwayClientOptions): ConwayClient {
 
   const readFile = async (filePath: string): Promise<string> => {
     if (isLocal) {
-      return fs.readFileSync(resolveLocalPath(filePath), "utf-8");
+      return readToolFile(resolveLocalPath(filePath), execution.readRoots, execution.maxOutputBytes);
     }
     try {
       const result = await request(

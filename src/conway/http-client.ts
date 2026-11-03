@@ -10,34 +10,7 @@
 import type { HttpClientConfig } from "../types.js";
 import { DEFAULT_HTTP_CLIENT_CONFIG } from "../types.js";
 
-const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "::1"]);
-
-function assertSecureUrl(
-  url: string,
-  allowHttpOnLoopback: boolean,
-): void {
-  let parsed: URL;
-  try {
-    parsed = new URL(url);
-  } catch {
-    throw new Error(`Invalid URL: ${url}`);
-  }
-
-  const protocol = parsed.protocol.toLowerCase();
-  if (protocol === "https:") {
-    return;
-  }
-
-  const host = parsed.hostname.toLowerCase();
-  if (protocol === "http:" && allowHttpOnLoopback && LOOPBACK_HOSTS.has(host)) {
-    return;
-  }
-
-  throw new Error(
-    `HTTPS required: refusing insecure URL ${url}. ` +
-      "For local development, only loopback HTTP (localhost/127.0.0.1/::1) can be explicitly enabled.",
-  );
-}
+import { assertSecureUrl, fetchWithPolicy, NetworkPolicyError } from "../security/network.js";
 
 export class CircuitOpenError extends Error {
   constructor(public readonly resetAt: number) {
@@ -63,6 +36,9 @@ export class ResilientHttpClient {
       timeout?: number;
       idempotencyKey?: string;
       retries?: number;
+      networkPolicy?: "public" | "configured";
+      maxResponseBytes?: number;
+      redirectPolicy?: "none" | "same-origin" | "public";
     },
   ): Promise<Response> {
     assertSecureUrl(url, this.config.allowHttpOnLoopback);
@@ -74,23 +50,21 @@ export class ResilientHttpClient {
     const opts = options ?? {};
     const timeout = opts.timeout ?? this.config.baseTimeout;
     const maxRetries = opts.retries ?? this.config.maxRetries;
+    const headers = new Headers(opts.headers);
+    if (opts.idempotencyKey) headers.set("Idempotency-Key", opts.idempotencyKey);
 
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), timeout);
-
       try {
-        const response = await fetch(url, {
+        const response = await fetchWithPolicy(url, {
           ...opts,
-          signal: controller.signal,
-          headers: {
-            ...opts.headers,
-            ...(opts.idempotencyKey
-              ? { "Idempotency-Key": opts.idempotencyKey }
-              : {}),
-          },
+          headers,
+        }, {
+          timeoutMs: timeout,
+          allowHttpOnLoopback: this.config.allowHttpOnLoopback,
+          publicOnly: opts.networkPolicy === "public",
+          maxResponseBytes: opts.maxResponseBytes,
+          redirectPolicy: opts.redirectPolicy,
         });
-        clearTimeout(timer);
 
         // Count retryable HTTP errors toward circuit breaker, regardless of
         // whether we will actually retry. A server consistently returning 502
@@ -111,7 +85,7 @@ export class ResilientHttpClient {
         this.consecutiveFailures = 0;
         return response;
       } catch (error) {
-        clearTimeout(timer);
+        if (error instanceof NetworkPolicyError || opts.signal?.aborted) throw error;
         this.consecutiveFailures++;
         if (
           this.consecutiveFailures >= this.config.circuitBreakerThreshold

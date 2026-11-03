@@ -99,7 +99,10 @@ describe("SSRF Protection", () => {
     it("allows public IPs", () => {
       expect(isInternalNetwork("8.8.8.8")).toBe(false);
       expect(isInternalNetwork("1.1.1.1")).toBe(false);
-      expect(isInternalNetwork("203.0.113.1")).toBe(false);
+    });
+
+    it("blocks documentation addresses that are not globally routable", () => {
+      expect(isInternalNetwork("203.0.113.1")).toBe(true);
     });
 
     it("allows public hostnames", () => {

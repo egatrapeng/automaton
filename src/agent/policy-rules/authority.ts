@@ -39,7 +39,8 @@ function deny(
  * Check if an input source represents external (non-agent) authority.
  */
 function isExternalSource(inputSource: string | undefined): boolean {
-  return inputSource === undefined || inputSource === "heartbeat";
+  // Unknown future source labels must not silently become privileged.
+  return !["creator", "agent", "system", "wakeup"].includes(inputSource ?? "");
 }
 
 /**

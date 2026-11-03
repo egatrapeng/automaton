@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   ContextManager,
   createTokenCounter,
+  MAX_EXACT_TOKENIZATION_BYTES,
+  MAX_TOKEN_CACHE_BYTES,
   type StreamEvent,
   type TokenCounter,
 } from "../../memory/context-manager.js";
@@ -84,8 +86,46 @@ describe("createTokenCounter", () => {
       counter.countTokens(`evict-${i}`);
     }
 
-    expect(counter.cache.has("default::evict-0")).toBe(false);
-    expect(counter.cache.has("default::evict-10004")).toBe(true);
+    expect(counter.cache.has(JSON.stringify([null, "evict-0"]))).toBe(false);
+    expect(counter.cache.has(JSON.stringify([null, "evict-10004"]))).toBe(true);
+  });
+
+  it("bounds BPE work on long repetitive text with a conservative byte upper bound", () => {
+    const counter = createTokenCounter();
+    const text = "x".repeat(500_000);
+    expect(counter.countTokens(text)).toBe(Buffer.byteLength(text, "utf8"));
+    expect(counter.cache.size).toBe(0);
+  });
+
+  it("does not underestimate long Unicode input with a character heuristic", () => {
+    const counter = createTokenCounter();
+    const text = "漢😀".repeat(MAX_EXACT_TOKENIZATION_BYTES);
+    expect(counter.countTokens(text)).toBe(Buffer.byteLength(text, "utf8"));
+    expect(counter.countTokens(text)).toBeGreaterThan(text.length);
+  });
+
+  it("keeps model and content cache keys unambiguous", () => {
+    const counter = createTokenCounter();
+    counter.countTokens("b::c", "a");
+    counter.countTokens("c", "a::b");
+    expect(counter.cache.size).toBe(2);
+  });
+
+  it("bounds retained text by bytes as well as entry count", () => {
+    const counter = createTokenCounter();
+    for (let i = 0; i < 2_500; i++) {
+      counter.countTokens("short", `model-${i}-${"m".repeat(480)}`);
+    }
+    const retainedBytes = [...counter.cache.keys()].reduce((sum, key) => sum + key.length * 2, 0);
+    expect(retainedBytes).toBeLessThanOrEqual(MAX_TOKEN_CACHE_BYTES);
+    expect(counter.cache.size).toBeLessThan(2_500);
+    counter.countTokens("short", "m".repeat(10_000));
+    expect([...counter.cache.keys()].some(key => key.length > 10_000)).toBe(false);
+  });
+
+  it("encodes special-token-shaped external data as ordinary text", () => {
+    const counter = createTokenCounter();
+    expect(counter.countTokens("<|endoftext|>")).toBeGreaterThan(0);
   });
 });
 

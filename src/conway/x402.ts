@@ -8,13 +8,15 @@
 import {
   createPublicClient,
   http,
-  parseUnits,
+  isAddress,
   type Address,
   type PrivateKeyAccount,
 } from "viem";
 import { base, baseSepolia } from "viem/chains";
 import { ResilientHttpClient } from "./http-client.js";
 import type { ChainType } from "../identity/chain.js";
+import { randomUUID } from "node:crypto";
+import { PaymentLedger, centsToAtomic, type PaymentBudget, type PaymentState } from "./payment-ledger.js";
 
 const x402HttpClient = new ResilientHttpClient();
 
@@ -59,15 +61,39 @@ interface ParsedPaymentRequirement {
   requirement: PaymentRequirement;
 }
 
-interface X402PaymentResult {
+export interface X402PaymentResult {
   success: boolean;
   response?: any;
   error?: string;
   status?: number;
+  /** An HTTP acceptance is not proof of on-chain settlement. */
+  payment?: {
+    operationId: string;
+    amountAtomic: string;
+    amountCents: number;
+    recipient: string;
+    network: string;
+    state: PaymentState;
+    validUntil: number;
+  };
+}
+
+export interface PaymentSecurityOptions {
+  ledger?: PaymentLedger;
+  ledgerPath?: string;
+  operationId?: string;
+  budget?: Partial<PaymentBudget>;
+  expectedNetwork?: string;
+  allowedRecipients?: string[];
+  maxAuthorizationSeconds?: number;
+  /** Public-only for agent-chosen URLs; configured for operator-selected backends. */
+  networkPolicy?: "public" | "configured";
 }
 
 export interface UsdcBalanceResult {
   balance: number;
+  /** Exact EVM balance for reserve enforcement; never reconstruct money from a float. */
+  balanceAtomic?: string;
   network: string;
   ok: boolean;
   error?: string;
@@ -82,16 +108,9 @@ function safeJsonParse(value: string): unknown | null {
 }
 
 function parsePositiveInt(value: unknown): number | null {
-  if (typeof value === "number" && Number.isFinite(value) && value > 0) {
-    return Math.floor(value);
-  }
-  if (typeof value === "string" && value.trim()) {
-    const parsed = Number(value);
-    if (Number.isFinite(parsed) && parsed > 0) {
-      return Math.floor(parsed);
-    }
-  }
-  return null;
+  if (typeof value === "string" && !/^[1-9]\d*$/.test(value)) return null;
+  const parsed = typeof value === "string" ? Number(value) : value;
+  return typeof parsed === "number" && Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
 }
 
 function normalizeNetwork(raw: unknown): NetworkId | null {
@@ -128,12 +147,10 @@ function normalizePaymentRequirement(raw: unknown): PaymentRequirement | null {
     : typeof value.asset === "string"
       ? value.asset
       : USDC_ADDRESSES[network];
-  const requiredDeadlineSeconds =
-    parsePositiveInt(value.requiredDeadlineSeconds) ??
-    parsePositiveInt(value.maxTimeoutSeconds) ??
-    300;
+  const rawDeadline = value.requiredDeadlineSeconds ?? value.maxTimeoutSeconds;
+  const requiredDeadlineSeconds = rawDeadline === undefined ? 300 : parsePositiveInt(rawDeadline);
 
-  if (!scheme || !maxAmountRequired || !payToAddress || !usdcAddress) {
+  if (!scheme || !maxAmountRequired || !payToAddress || !usdcAddress || !requiredDeadlineSeconds) {
     return null;
   }
 
@@ -157,31 +174,53 @@ function normalizePaymentRequired(raw: unknown): PaymentRequiredResponse | null 
     .filter((v): v is PaymentRequirement => v !== null);
   if (!accepts.length) return null;
 
-  const x402Version = parsePositiveInt(value.x402Version) ?? 1;
+  const x402Version = value.x402Version === undefined ? 1 : parsePositiveInt(value.x402Version);
+  if (x402Version !== 1 && x402Version !== 2) return null;
   return { x402Version, accepts };
 }
 
-function parseMaxAmountRequired(maxAmountRequired: string, x402Version: number): bigint {
+/** Integer values in x402 are atomic units in both protocol versions; never guess by digit length. */
+function parseMaxAmountRequired(maxAmountRequired: string, _x402Version: number): bigint {
   const amount = maxAmountRequired.trim();
-  if (!/^\d+(\.\d+)?$/.test(amount)) {
-    throw new Error(`Invalid maxAmountRequired: ${maxAmountRequired}`);
+  if (!/^\d+(?:\.\d{1,6})?$/.test(amount) || amount.length > 80) {
+    throw new Error("Invalid USDC amount: expected positive atomic integer or decimal with at most 6 places");
   }
-
-  if (amount.includes(".")) {
-    return parseUnits(amount, 6);
-  }
-  if (x402Version >= 2 || amount.length > 6) {
-    return BigInt(amount);
-  }
-  return parseUnits(amount, 6);
+  const [whole, fraction] = amount.split(".");
+  const atomic = fraction === undefined ? BigInt(whole) : BigInt(whole) * 1_000_000n + BigInt(fraction.padEnd(6, "0"));
+  if (atomic <= 0n || atomic >= 2n ** 256n) throw new Error("USDC amount must be positive and fit uint256");
+  return atomic;
 }
 
-function selectRequirement(parsed: PaymentRequiredResponse): PaymentRequirement {
-  const exactSupported = parsed.accepts.find(
-    (r) => r.scheme === "exact" && !!CHAINS[r.network],
-  );
-  if (exactSupported) return exactSupported;
-  return parsed.accepts[0];
+function validateRequirement(requirement: PaymentRequirement, security: PaymentSecurityOptions): void {
+  if (requirement.scheme !== "exact") throw new Error("Unsupported x402 payment scheme");
+  if (!CHAINS[requirement.network]) throw new Error("Unsupported payment network");
+  if (security.expectedNetwork && requirement.network !== security.expectedNetwork) throw new Error("Unexpected payment network");
+  if (!isAddress(requirement.payToAddress, { strict: false }) || /^0x0{40}$/i.test(requirement.payToAddress)) {
+    throw new Error("Invalid payment recipient");
+  }
+  if (!isAddress(requirement.usdcAddress, { strict: false }) ||
+      requirement.usdcAddress.toLowerCase() !== USDC_ADDRESSES[requirement.network].toLowerCase()) {
+    throw new Error("Payment asset must be the configured network's canonical USDC contract");
+  }
+  if (security.allowedRecipients && !security.allowedRecipients.some(r => r.toLowerCase() === requirement.payToAddress.toLowerCase())) {
+    throw new Error("Payment recipient is not approved");
+  }
+  const maxSeconds = security.maxAuthorizationSeconds ?? 300;
+  if (!Number.isSafeInteger(maxSeconds) || maxSeconds < 1 || maxSeconds > 3600 || requirement.requiredDeadlineSeconds > maxSeconds) {
+    throw new Error("Payment authorization lifetime exceeds configured maximum");
+  }
+}
+
+function selectRequirement(parsed: PaymentRequiredResponse, security: PaymentSecurityOptions = {}, cap?: bigint): PaymentRequirement {
+  const supported = parsed.accepts.find(requirement => {
+    try {
+      validateRequirement(requirement, security);
+      const amount = parseMaxAmountRequired(requirement.maxAmountRequired, parsed.x402Version);
+      return cap === undefined || amount <= cap;
+    } catch { return false; }
+  });
+  // Preserve a concrete error from validation when the server offers no acceptable option.
+  return supported ?? parsed.accepts[0];
 }
 
 /** Solana USDC mint address (mainnet). */
@@ -274,6 +313,7 @@ export async function getUsdcBalanceDetailed(
     // USDC has 6 decimals
     return {
       balance: Number(balance) / 1_000_000,
+      balanceAtomic: balance.toString(),
       network,
       ok: true,
     };
@@ -294,7 +334,7 @@ export async function checkX402(
   url: string,
 ): Promise<PaymentRequirement | null> {
   try {
-    const resp = await x402HttpClient.request(url, { method: "HEAD" });
+    const resp = await x402HttpClient.request(url, { method: "HEAD", networkPolicy: "public", redirectPolicy: "none", retries: 0 });
     if (resp.status !== 402) {
       return null;
     }
@@ -315,100 +355,84 @@ export async function x402Fetch(
   method: string = "GET",
   body?: string,
   headers?: Record<string, string>,
-  maxPaymentCents?: number,
+  maxPaymentCents: number = 100,
   chainType?: ChainType,
+  security: PaymentSecurityOptions = {},
 ): Promise<X402PaymentResult> {
-  // Solana wallets cannot sign EVM x402 payments
-  if (chainType === "solana") {
-    return {
-      success: false,
-      error: "x402 payment requires an EVM wallet. Solana automatons should use Conway credits API instead.",
-    };
-  }
-
+  if (chainType === "solana") return { success: false, error: "x402 payment requires an EVM wallet. Solana automatons should use Conway credits API instead." };
+  let ledger: PaymentLedger | undefined;
+  let paymentInfo: X402PaymentResult["payment"];
+  let reservationCreated = false;
+  let signingStarted = false;
   try {
-    // Initial request (non-mutating probe, uses resilient client)
+    const cap = centsToAtomic(maxPaymentCents);
+    const operationId = security.operationId ?? randomUUID();
+    if (security.operationId) {
+      ledger = security.ledger ?? new PaymentLedger(security.ledgerPath);
+      if (ledger.get(operationId)) throw new Error("Payment operation already reserved; reconcile its previous outcome before retrying");
+    }
+    // Never retry an arbitrary POST/PUT probe, or forward authentication/payment across redirects.
     const initialResp = await x402HttpClient.request(url, {
-      method,
-      headers: { ...headers, "Content-Type": "application/json" },
-      body,
+      method, headers: { ...headers, "Content-Type": "application/json" }, body,
+      retries: 0, redirect: "error", redirectPolicy: "none", networkPolicy: security.networkPolicy ?? "public", idempotencyKey: operationId,
     });
-
     if (initialResp.status !== 402) {
-      const data = await initialResp
-        .json()
-        .catch(() => initialResp.text());
-      return { success: initialResp.ok, response: data, status: initialResp.status };
+      return { success: initialResp.ok, response: await readResponse(initialResp), status: initialResp.status };
     }
-
-    // Parse payment requirements
-    const parsed = await parsePaymentRequired(initialResp);
-    if (!parsed) {
-      return {
-        success: false,
-        error: "Could not parse payment requirements",
-        status: initialResp.status,
-      };
-    }
-
-    // Check amount against maxPaymentCents BEFORE signing
-    if (maxPaymentCents !== undefined) {
-      const amountAtomic = parseMaxAmountRequired(
-        parsed.requirement.maxAmountRequired,
-        parsed.x402Version,
-      );
-      // Convert atomic units (6 decimals) to cents (2 decimals)
-      const amountCents = Number(amountAtomic) / 10_000;
-      if (amountCents > maxPaymentCents) {
-        return {
-          success: false,
-          error: `Payment of ${amountCents.toFixed(2)} cents exceeds max allowed ${maxPaymentCents} cents`,
-          status: 402,
-        };
-      }
-    }
-
-    // Sign payment
-    let payment: any;
-    try {
-      payment = await signPayment(
-        account,
-        parsed.requirement,
-        parsed.x402Version,
-      );
-    } catch (err: any) {
-      return {
-        success: false,
-        error: `Failed to sign payment: ${err?.message || String(err)}`,
-        status: initialResp.status,
-      };
-    }
-
-    // Retry with payment
-    const paymentHeader = Buffer.from(
-      JSON.stringify(payment),
-    ).toString("base64");
-
+    const parsed = await parsePaymentRequired(initialResp, security, cap);
+    if (!parsed) return { success: false, error: "Could not parse payment requirements", status: 402 };
+    validateRequirement(parsed.requirement, security);
+    const amountAtomic = parseMaxAmountRequired(parsed.requirement.maxAmountRequired, parsed.x402Version);
+    if (amountAtomic > cap) return { success: false, error: "Payment exceeds max allowed amount", status: 402 };
+    const amountCents = Number((amountAtomic + 9_999n) / 10_000n);
+    const budget: PaymentBudget = {
+      maxSingleCents: maxPaymentCents,
+      maxHourlyCents: 10_000,
+      maxDailyCents: 25_000,
+      ...security.budget,
+    };
+    // The independent explicit call cap can never be broadened by budget configuration.
+    budget.maxSingleCents = Math.min(budget.maxSingleCents, maxPaymentCents);
+    const validUntil = (Math.floor(Date.now() / 1000) + parsed.requirement.requiredDeadlineSeconds) * 1000;
+    ledger ??= security.ledger ?? new PaymentLedger(security.ledgerPath);
+    ledger.reserve({ id: operationId, wallet: account.address, network: parsed.requirement.network,
+      recipient: parsed.requirement.payToAddress, destination: new URL(url).origin, amountAtomic, validUntil }, budget);
+    reservationCreated = true;
+    paymentInfo = { operationId, amountAtomic: amountAtomic.toString(), amountCents,
+      recipient: parsed.requirement.payToAddress, network: parsed.requirement.network, state: "reserved", validUntil };
+    // Persist uncertainty before invoking a signer: a crash after signature creation must not release budget.
+    ledger.setState(operationId, "authorized");
+    signingStarted = true;
+    paymentInfo.state = "authorized";
+    const payment = await signPayment(account, parsed.requirement, parsed.x402Version, Math.floor(validUntil / 1000));
+    const paymentHeader = Buffer.from(JSON.stringify(payment)).toString("base64");
     const paidResp = await x402HttpClient.request(url, {
-      method,
-      headers: {
-        ...headers,
-        "Content-Type": "application/json",
-        "X-Payment": paymentHeader,
-      },
-      body,
-      retries: 0, // Paid request: do not auto-retry (payment already signed)
+      method, headers: { ...headers, "Content-Type": "application/json", "X-Payment": paymentHeader }, body,
+      retries: 0, redirect: "error", redirectPolicy: "none", networkPolicy: security.networkPolicy ?? "public", idempotencyKey: operationId,
     });
-
-    const data = await paidResp.json().catch(() => paidResp.text());
-    return { success: paidResp.ok, response: data, status: paidResp.status };
+    paymentInfo.state = paidResp.ok ? "accepted" : "uncertain";
+    ledger.setState(operationId, paymentInfo.state);
+    return { success: paidResp.ok, response: await readResponse(paidResp), status: paidResp.status, payment: paymentInfo };
   } catch (err: any) {
-    return { success: false, error: err.message };
+    if (reservationCreated && ledger && paymentInfo) {
+      paymentInfo.state = signingStarted ? "uncertain" : "failed";
+      try { ledger.setState(paymentInfo.operationId, paymentInfo.state); } catch { /* reservation remains conservative */ }
+    }
+    return { success: false, error: err.message || String(err), payment: paymentInfo };
+  } finally {
+    if (ledger && ledger !== security.ledger) ledger.close();
   }
+}
+
+async function readResponse(response: Response): Promise<unknown> {
+  const text = await response.text();
+  try { return JSON.parse(text); } catch { return text; }
 }
 
 async function parsePaymentRequired(
   resp: Response,
+  security: PaymentSecurityOptions = {},
+  cap?: bigint,
 ): Promise<ParsedPaymentRequirement | null> {
   const header = resp.headers.get("X-Payment-Required");
   if (header) {
@@ -417,7 +441,7 @@ async function parsePaymentRequired(
     if (normalizedRaw) {
       return {
         x402Version: normalizedRaw.x402Version,
-        requirement: selectRequirement(normalizedRaw),
+        requirement: selectRequirement(normalizedRaw, security, cap),
       };
     }
 
@@ -427,7 +451,7 @@ async function parsePaymentRequired(
       if (parsedDecoded) {
         return {
           x402Version: parsedDecoded.x402Version,
-          requirement: selectRequirement(parsedDecoded),
+          requirement: selectRequirement(parsedDecoded, security, cap),
         };
       }
     } catch {
@@ -441,7 +465,7 @@ async function parsePaymentRequired(
     if (!parsedBody) return null;
     return {
       x402Version: parsedBody.x402Version,
-      requirement: selectRequirement(parsedBody),
+      requirement: selectRequirement(parsedBody, security, cap),
     };
   } catch {
     return null;
@@ -452,6 +476,7 @@ async function signPayment(
   account: PrivateKeyAccount,
   requirement: PaymentRequirement,
   x402Version: number,
+  validBefore: number,
 ): Promise<any> {
   const chain = CHAINS[requirement.network];
   if (!chain) {
@@ -464,7 +489,6 @@ async function signPayment(
 
   const now = Math.floor(Date.now() / 1000);
   const validAfter = now - 60;
-  const validBefore = now + requirement.requiredDeadlineSeconds;
   const amount = parseMaxAmountRequired(
     requirement.maxAmountRequired,
     x402Version,

@@ -22,6 +22,10 @@ import type {
 import type { PolicyEngine } from "./policy-engine.js";
 import { sanitizeToolResult, sanitizeInput } from "./injection-defense.js";
 import { createLogger } from "../observability/logger.js";
+import { isSensitivePath } from "../security/files.js";
+import { redactText, redactValue } from "../security/redaction.js";
+import { setGoalInputSource } from "../security/input-provenance.js";
+import { paymentOptionsFor } from "../security/payment-options.js";
 
 const logger = createLogger("tools");
 
@@ -34,15 +38,15 @@ const SANDBOX_HOME = "/root";
  * Validate that a file path resolves to within the allowed root directory.
  * Returns the resolved absolute path, or an error string if out of bounds.
  */
-function confinePathToSandbox(filePath: string): string | { error: string } {
+function confinePathToSandbox(filePath: string, home = SANDBOX_HOME): string | { error: string } {
   // Resolve ~ to SANDBOX_HOME
   const expanded = filePath.startsWith("~")
-    ? nodePath.join(SANDBOX_HOME, filePath.slice(1))
+    ? nodePath.join(home, filePath.slice(1))
     : filePath;
   // Resolve to absolute (relative paths resolve against SANDBOX_HOME)
-  const resolved = nodePath.resolve(SANDBOX_HOME, expanded);
+  const resolved = nodePath.resolve(home, expanded);
   // Ensure the resolved path is within the sandbox home
-  if (resolved !== SANDBOX_HOME && !resolved.startsWith(SANDBOX_HOME + "/")) {
+  if (resolved !== home && !resolved.startsWith(home + "/")) {
     return {
       error: `Blocked: write_file path "${filePath}" resolves to "${resolved}" which is outside the allowed directory (${SANDBOX_HOME}). Writes are confined to the sandbox home.`,
     };
@@ -159,7 +163,8 @@ export function createBuiltinTools(sandboxId: string): AutomatonTool[] {
       execute: async (args, ctx) => {
         const filePath = args.path as string;
         // Path confinement: restrict writes to sandbox home directory
-        const confined = confinePathToSandbox(filePath);
+        const home = ctx.config.execution?.mode === "host" ? process.env.HOME || "/root" : SANDBOX_HOME;
+        const confined = confinePathToSandbox(filePath, home);
         if (typeof confined === "object") return confined.error;
         // Guard against overwriting protected files (same check as edit_own_file)
         const { isProtectedFile } = await import("../self-mod/code.js");
@@ -184,6 +189,7 @@ export function createBuiltinTools(sandboxId: string): AutomatonTool[] {
       },
       execute: async (args, ctx) => {
         const filePath = args.path as string;
+        if (isSensitivePath(filePath)) return "Blocked: Cannot read sensitive file.";
         // Block reads of sensitive files (wallet, env, config secrets)
         const basename = filePath.split("/").pop() || "";
         const sensitiveFiles = ["wallet.json", ".env", "automaton.json"];
@@ -197,7 +203,10 @@ export function createBuiltinTools(sandboxId: string): AutomatonTool[] {
         }
         try {
           return await ctx.conway.readFile(filePath);
-        } catch {
+        } catch (err: any) {
+          // A file policy denial must never turn into a shell read bypass.
+          if (err?.code === "FILE_ACCESS_DENIED") return "Blocked: Cannot read sensitive file or file outside configured roots.";
+          if (ctx.config.execution?.mode === "host" || !ctx.identity.sandboxId) return "ERROR: File not found or not readable.";
           // Conway files/read API may be broken — fall back to exec(cat)
           const result = await ctx.conway.exec(
             `cat ${escapeShellArg(filePath)}`,
@@ -287,6 +296,7 @@ export function createBuiltinTools(sandboxId: string): AutomatonTool[] {
             description:
               "Amount in USD to spend on credits. Must be one of the valid tiers: 5, 25, 100, 500, 1000, 2500.",
           },
+          operation_id: { type: "string", description: "Stable identifier reused for the same purchase intent; do not retry an uncertain authorization with a new identifier" },
         },
         required: ["amount_usd"],
       },
@@ -312,14 +322,21 @@ export function createBuiltinTools(sandboxId: string): AutomatonTool[] {
           return `Insufficient USDC. Balance: $${usdcBalance.toFixed(2)}, requested: $${amountUsd}. Choose a smaller tier or wait for funding.`;
         }
 
+        const options = paymentOptionsFor(ctx.config);
+        options.operationId = args.operation_id as string | undefined;
         const result = await topupCredits(
           ctx.config.conwayApiUrl,
           ctx.identity.account,
           amountUsd,
+          undefined,
+          options,
         );
+        if (result.payment && result.payment.state !== "failed" && result.payment.state !== "reserved") {
+          ctx.recordPayment?.({ amountCents: result.payment.amountCents, recipient: result.payment.recipient, domain: new URL(ctx.config.conwayApiUrl).hostname });
+        }
 
         if (!result.success) {
-          return `Credit topup failed: ${result.error}`;
+          return `Credit topup failed: ${result.error}${result.payment ? `; authorization ${result.payment.operationId}: ${result.payment.state}. Reconcile this authorization before requesting another purchase.` : ""}`;
         }
 
         // Record transaction
@@ -333,7 +350,7 @@ export function createBuiltinTools(sandboxId: string): AutomatonTool[] {
           timestamp: new Date().toISOString(),
         });
 
-        return `Credit topup successful: +$${amountUsd} (${amountUsd * 100} cents) credits purchased via x402. Check your new balance with check_credits.`;
+        return `Credit topup accepted: +$${amountUsd} (${amountUsd * 100} cents) credits via x402. Check your new balance with check_credits.${result.payment ? ` Authorization ${result.payment.operationId}: ${result.payment.state} (HTTP result, not confirmed on-chain settlement).` : ""}`;
       },
     },
     {
@@ -498,52 +515,24 @@ export function createBuiltinTools(sandboxId: string): AutomatonTool[] {
     {
       name: "reset_to_upstream",
       description:
-        "Reset your codebase to the official upstream release. Use when self-modifications have broken things beyond repair.",
+        "Recover to an exact revision of your selected origin. First call without commit to review the recovery diff; then pass that full commit. Preserves a backup ref and working-tree archive before resetting.",
       category: "self_mod",
       riskLevel: "dangerous",
-      parameters: { type: "object", properties: {} },
-      execute: async (_args, ctx) => {
-        const repoRoot = process.cwd();
-
-        // Fetch latest upstream
-        const fetch = await ctx.conway.exec(
-          `cd '${repoRoot}' && git fetch origin main`,
-          30_000,
-        );
-        if (fetch.exitCode !== 0) {
-          return `Failed to fetch upstream: ${fetch.stderr}`;
+      parameters: { type: "object", properties: { commit: { type: "string", description: "Full target hash from the preceding recovery review" } } },
+      execute: async (args, ctx) => {
+        const { checkUpstream, reviewRecoveryChanges, prepareReviewedUpdate } = await import("../self-mod/upstream.js");
+        if (!args.commit) {
+          checkUpstream();
+          const review = reviewRecoveryChanges();
+          return `Recovery preview: ${review.base} -> ${review.target}. Review before calling again with commit=${review.target}.\n${review.diff}`;
         }
-
-        // Record what we're about to lose
-        const localCommits = await ctx.conway.exec(
-          `cd '${repoRoot}' && git log origin/main..HEAD --oneline`,
-          10_000,
-        );
-
-        // Hard reset
-        const reset = await ctx.conway.exec(
-          `cd '${repoRoot}' && git reset --hard origin/main`,
-          30_000,
-        );
-        if (reset.exitCode !== 0) {
-          return `Reset failed: ${reset.stderr}`;
-        }
-
-        // Reinstall + rebuild
-        const build = await ctx.conway.exec(
-          `cd '${repoRoot}' && npm install && npm run build`,
-          120_000,
-        );
-
-        // Audit log
+        const update = prepareReviewedUpdate(args.commit as string, { recovery: true });
+        const reset = await ctx.conway.exec(update.command, 300_000);
+        if (reset.exitCode !== 0) return `Recovery refused or failed: ${reset.stderr}`;
+        const build = await ctx.conway.exec(update.buildCommand, 300_000);
         const { logModification } = await import("../self-mod/audit-log.js");
-        logModification(ctx.db, "upstream_reset", "Reset to upstream origin/main", {
-          diff: localCommits.stdout.trim() || "(no local commits)",
-          reversible: false,
-        });
-
-        const discarded = localCommits.stdout.trim();
-        return `Reset to upstream. ${discarded ? "Discarded local commits:\n" + discarded : "No local commits lost."} ${build.exitCode === 0 ? "Rebuild succeeded." : "Rebuild failed: " + build.stderr}`;
+        logModification(ctx.db, "upstream_reset", `Recovered to ${update.target}; rollback ${update.backupRef}; working-tree backup ${update.backupDirectory}`, { reversible: true });
+        return `Recovered to ${update.target}. Backup ref: ${update.backupRef}. Files: ${update.backupDirectory}. ${build.exitCode === 0 ? "Rebuild succeeded." : "Rebuild failed: " + build.stderr}`;
       },
     },
     {
@@ -568,20 +557,9 @@ export function createBuiltinTools(sandboxId: string): AutomatonTool[] {
         if (!/^[@a-zA-Z0-9._\/-]+$/.test(pkg)) {
           return `Blocked: invalid package name "${pkg}"`;
         }
-        const result = await ctx.conway.exec(`npm install -g ${pkg}`, 60000);
-
-        const { ulid } = await import("ulid");
-        ctx.db.insertModification({
-          id: ulid(),
-          timestamp: new Date().toISOString(),
-          type: "tool_install",
-          description: `Installed npm package: ${pkg}`,
-          reversible: true,
-        });
-
-        return result.exitCode === 0
-          ? `Installed: ${pkg}`
-          : `Failed to install ${pkg}: ${result.stderr}`;
+        const { installNpmPackage } = await import("../self-mod/tools-manager.js");
+        const result = await installNpmPackage(ctx.conway, ctx.db, pkg);
+        return result.success ? `Installed from verified registry archive: ${pkg}` : `Failed to install ${pkg}: ${result.error}`;
       },
     },
     // ── Self-Mod: Upstream Awareness ──
@@ -604,7 +582,7 @@ export function createBuiltinTools(sandboxId: string): AutomatonTool[] {
         const output = diffs
           .map(
             (d, i) =>
-              `--- COMMIT ${i + 1}/${diffs.length} ---\nHash: ${d.hash}\nAuthor: ${d.author}\nMessage: ${d.message}\n\n${d.diff.slice(0, 4000)}${d.diff.length > 4000 ? "\n... (diff truncated)" : ""}\n--- END COMMIT ${i + 1} ---`,
+              `--- COMMIT ${i + 1}/${diffs.length} ---\nHash: ${d.hash}\nAuthor: ${d.author}\nMessage: ${d.message}\n\n${d.diff}\n--- END COMMIT ${i + 1} ---`,
           )
           .join("\n\n");
 
@@ -643,21 +621,20 @@ export function createBuiltinTools(sandboxId: string): AutomatonTool[] {
         };
 
         let appliedSummary: string;
+        let buildCommand: string;
         try {
-          if (commit) {
-            await run(`git cherry-pick ${commit}`);
-            appliedSummary = `Cherry-picked ${commit}`;
-          } else {
-            await run("git pull origin main --ff-only");
-            appliedSummary = "Pulled all of origin/main (fast-forward)";
-          }
+          const { prepareReviewedUpdate } = await import("../self-mod/upstream.js");
+          const update = prepareReviewedUpdate(commit);
+          await run(update.command);
+          appliedSummary = `Applied reviewed revision ${update.target}; rollback ref ${update.backupRef}`;
+          buildCommand = update.buildCommand;
         } catch (err: any) {
           return `Git operation failed: ${err.message}. You may need to resolve conflicts manually.`;
         }
 
         // Rebuild
         try {
-          await run("npm install --ignore-scripts && npm run build");
+          await run(buildCommand);
         } catch (err: any) {
           return `${appliedSummary} — but rebuild failed: ${err.message}. The code is applied but not compiled.`;
         }
@@ -1667,6 +1644,7 @@ Model: ${ctx.inference.getDefaultModel()}
                 account: ctx.identity.account,
                 error: err,
                 chainType: ctx.config.chainType || ctx.identity.chainType || "evm",
+                paymentSecurity: paymentOptionsFor(ctx.config),
               });
               if (topup?.success) {
                 const retryLifecycle = new ChildLifecycle(ctx.db.raw);
@@ -1861,7 +1839,7 @@ Model: ${ctx.inference.getDefaultModel()}
         try {
           // Start the child process with nohup so it survives exec session end
           await childConway.exec(
-            "nohup node /root/automaton/dist/index.js --run > /root/.automaton/agent.log 2>&1 &",
+            "export PATH=/opt/automaton-tools/node_modules/.bin:$PATH; nohup node /root/automaton/dist/index.js --run > /root/.automaton/agent.log 2>&1 &",
             30_000,
           );
 
@@ -2736,6 +2714,7 @@ Model: ${ctx.inference.getDefaultModel()}
             type: "string",
             description: "The URL to fetch",
           },
+          operation_id: { type: "string", description: "Stable identifier for this purchase; reuse on retries to prevent duplicate signing" },
           method: {
             type: "string",
             description: "HTTP method (default: GET)",
@@ -2770,6 +2749,14 @@ Model: ${ctx.inference.getDefaultModel()}
         const maxPayment =
           ctx.config.treasuryPolicy?.maxX402PaymentCents ??
           DEFAULT_TREASURY_POLICY.maxX402PaymentCents;
+        const security = paymentOptionsFor(ctx.config);
+        security.operationId = args.operation_id as string | undefined;
+        if ((security.budget?.minimumReserveCents ?? 0) > 0) {
+          const { getUsdcBalanceDetailed } = await import("../conway/x402.js");
+          const balance = await getUsdcBalanceDetailed(ctx.identity.address as `0x${string}`);
+          if (!balance.ok || balance.balanceAtomic === undefined) return "x402 fetch failed: Cannot enforce configured USDC reserve without a verified balance";
+          security.budget!.balanceAtomic = BigInt(balance.balanceAtomic);
+        }
         const result = await x402Fetch(
           url,
           ctx.identity.account,
@@ -2777,10 +2764,15 @@ Model: ${ctx.inference.getDefaultModel()}
           body,
           extraHeaders,
           maxPayment,
+          chainType,
+          security,
         );
+        if (result.payment && result.payment.state !== "failed" && result.payment.state !== "reserved") {
+          ctx.recordPayment?.({ amountCents: result.payment.amountCents, recipient: result.payment.recipient, domain: new URL(url).hostname });
+        }
 
         if (!result.success) {
-          return `x402 fetch failed: ${result.error || "Unknown error"}`;
+          return `x402 fetch failed: ${result.error || "Unknown error"}${result.payment ? `; authorization ${result.payment.operationId}: ${result.payment.state}. Reconcile before retrying.` : ""}`;
         }
 
         const responseStr =
@@ -2790,9 +2782,9 @@ Model: ${ctx.inference.getDefaultModel()}
 
         // Truncate very large responses
         if (responseStr.length > 10000) {
-          return `x402 fetch succeeded (truncated):\n${responseStr.slice(0, 10000)}...`;
+          return `x402 fetch succeeded (truncated):\n${responseStr.slice(0, 10000)}...${result.payment ? `\nAuthorization ${result.payment.operationId}: ${result.payment.state}; ${result.payment.amountAtomic} USDC atomic units.` : ""}`;
         }
-        return `x402 fetch succeeded:\n${responseStr}`;
+        return `x402 fetch succeeded:\n${responseStr}${result.payment ? `\nAuthorization ${result.payment.operationId}: ${result.payment.state}; ${result.payment.amountAtomic} USDC atomic units.` : ""}`;
       },
     },
 
@@ -2869,6 +2861,7 @@ Model: ${ctx.inference.getDefaultModel()}
         }
 
         const goal = createGoal(ctx.db.raw, title, description, strategy);
+        setGoalInputSource(ctx.db.raw, goal.id, ctx.inputSource);
         return (
           `Goal created: "${goal.title}" (id: ${goal.id}, status: ${goal.status})\n` +
           `The orchestrator will pick this up on the next tick and begin planning.\n` +
@@ -3309,7 +3302,7 @@ export async function executeTool(
     return {
       id: ulid(),
       name: toolName,
-      arguments: args,
+      arguments: redactValue(args),
       result: "",
       durationMs: 0,
       error: `Unknown tool: ${toolName}`,
@@ -3331,7 +3324,7 @@ export async function executeTool(
       return {
         id: ulid(),
         name: toolName,
-        arguments: args,
+        arguments: redactValue(args),
         result: "",
         durationMs: Date.now() - startTime,
         error: `Policy denied: ${decision.reasonCode} — ${decision.humanMessage}`,
@@ -3340,7 +3333,15 @@ export async function executeTool(
   }
 
   try {
-    let result = await tool.execute(args, context);
+    let result = await tool.execute(args, {
+      ...context,
+      inputSource: turnContext ? turnContext.inputSource ?? "external" : context.inputSource,
+      recordPayment: (payment) => {
+        try { turnContext?.sessionSpend.recordSpend({ toolName, ...payment, category: "x402" }); }
+        catch (error) { logger.error("Payment reporting failed; durable authorization ledger remains authoritative", error instanceof Error ? error : undefined); }
+      },
+    });
+    result = redactText(result);
 
     // Sanitize results from external source tools
     if (EXTERNAL_SOURCE_TOOLS.has(toolName)) {
@@ -3366,35 +3367,13 @@ export async function executeTool(
             );
           }
         }
-      } else if (toolName === "x402_fetch") {
-        // x402 payment amounts are determined by the server response,
-        // but we record a nominal entry for tracking purposes
-        try {
-          turnContext.sessionSpend.recordSpend({
-            toolName: "x402_fetch",
-            amountCents: 0, // Actual amount is inside the x402 protocol
-            domain: (() => {
-              try {
-                return new URL(args.url as string).hostname;
-              } catch {
-                return undefined;
-              }
-            })(),
-            category: "x402",
-          });
-        } catch (error) {
-          logger.error(
-            "Spend tracking failed for x402_fetch",
-            error instanceof Error ? error : undefined,
-          );
-        }
       }
     }
 
     return {
       id: ulid(),
       name: toolName,
-      arguments: args,
+      arguments: redactValue(args),
       result,
       durationMs: Date.now() - startTime,
     };
@@ -3402,10 +3381,10 @@ export async function executeTool(
     return {
       id: ulid(),
       name: toolName,
-      arguments: args,
+      arguments: redactValue(args),
       result: "",
       durationMs: Date.now() - startTime,
-      error: err.message || String(err),
+      error: redactText(err.message || String(err)),
     };
   }
 }

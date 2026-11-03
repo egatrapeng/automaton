@@ -25,6 +25,7 @@ import type {
 } from "../types.js";
 import type { Database } from "better-sqlite3";
 import type { PolicyEngine } from "../agent/policy-engine.js";
+import { delegatedInputSource } from "../security/input-provenance.js";
 
 const logger = createLogger("orchestration.local-worker");
 const DEFAULT_ALLOWED_EDIT_ROOT = process.cwd();
@@ -127,7 +128,7 @@ export class LocalWorkerPool {
         : undefined,
       policyEngine: this.config.policyEngine,
       spendTracker: this.config.spendTracker,
-      inputSource: this.config.inputSource,
+      inputSource: delegatedInputSource(this.config.db, task.goalId, this.config.inputSource),
     };
 
     if (this.config.maxTurns) {

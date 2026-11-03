@@ -1,0 +1,26 @@
+# Example only: review paths, account and budgets before installation.
+# User=root is a deliberate full-host-administration choice, NOT isolation.
+[Unit]
+Description=Automaton autonomous runtime
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=automaton
+WorkingDirectory=/opt/automaton
+Environment=HOME=/home/automaton
+Environment=PATH=/opt/automaton-tools/node_modules/.bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/opt/automaton-tools/node_modules/.bin/node /opt/automaton/dist/index.js --run
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=30
+KillMode=control-group
+# Capacity limits, not a security sandbox. Adjust after measuring real tasks.
+MemoryMax=3G
+TasksMax=256
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

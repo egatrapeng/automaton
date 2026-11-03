@@ -465,7 +465,7 @@ describe("ResilientHttpClient", () => {
 
       expect(capturedHeaders).toBeDefined();
       const headers = capturedHeaders as Record<string, string>;
-      expect(headers["Idempotency-Key"]).toBe("test-key-123");
+      expect(new Headers(headers).get("Idempotency-Key")).toBe("test-key-123");
     });
 
     it("does not include Idempotency-Key header when not provided", async () => {

@@ -30,8 +30,9 @@ export type { TokenBudget };
 export { DEFAULT_TOKEN_BUDGET };
 
 /**
- * Estimate token count from text length.
- * Conservative estimate: ~4 characters per token for English text.
+ * Count bounded short text with cl100k, keeping the legacy English floor.
+ * Long text uses a conservative UTF-8 byte upper bound so tokenization cannot
+ * monopolize the event loop. It can trigger earlier context compression.
  */
 export function estimateTokens(text: string): number {
   const content = text ?? "";

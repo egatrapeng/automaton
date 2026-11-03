@@ -106,6 +106,11 @@ Automatons run on <a href="https://app.conway.tech" target="_blank">Conway Cloud
 
 ## Development
 
+For the hardened execution modes, migration, autonomous payment budgets and
+remaining host-administration risks, read [Security upgrade](docs/SECURITY_UPGRADE.md)
+before running a funded agent. Host mode retains administration capabilities and
+does not isolate the agent from its own server or secrets.
+
 ```bash
 git clone https://github.com/Conway-Research/automaton.git
 cd automaton

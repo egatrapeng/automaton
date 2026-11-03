@@ -9,11 +9,15 @@
  */
 
 import type { PrivateKeyAccount } from "viem";
+import { createHash } from "node:crypto";
 import type { SocialClientInterface, InboxMessage } from "../types.js";
 import type { ChainIdentity } from "../identity/chain.js";
 import { ResilientHttpClient } from "../conway/http-client.js";
 import { signSendPayload, signPollPayload, MESSAGE_LIMITS } from "./signing.js";
 import { validateRelayUrl, validateMessage } from "./validation.js";
+import { verifyMessageSignature } from "./protocol.js";
+import { canonicalSendMessage } from "./signing.js";
+import { detectChainType, normalizeAddress } from "../identity/chain.js";
 import { createLogger } from "../observability/logger.js";
 const logger = createLogger("social");
 
@@ -53,26 +57,24 @@ export function createSocialClient(
     }
   }
 
-  function checkReplayNonce(nonce: string): boolean {
-    if (!db) return false;
-    try {
-      const row = db
-        .prepare(
-          "SELECT 1 FROM heartbeat_dedup WHERE dedup_key = ? AND expires_at >= datetime('now')",
-        )
-        .get(`social:nonce:${nonce}`);
-      if (row) return true; // Already seen this nonce
+  const seen = new Map<string, true>();
 
-      // Insert nonce with 5 min TTL
-      const expiresAt = new Date(Date.now() + MESSAGE_LIMITS.replayWindowMs).toISOString();
-      db.prepare(
+  function checkReplay(key: string): boolean {
+    if (seen.has(key)) return true;
+    if (db) {
+      // A receipt belongs to the signed payload, not to the relay's mutable ID
+      // or unsigned nonce. Atomic insertion also covers concurrent clients.
+      // Durable receipts deliberately do not expire: queued messages may be old.
+      const inserted = db.prepare(
         "INSERT OR IGNORE INTO heartbeat_dedup (dedup_key, task_name, expires_at) VALUES (?, ?, ?)",
-      ).run(`social:nonce:${nonce}`, "social_replay", expiresAt);
-
-      return false;
-    } catch {
-      return false;
+      ).run(`social:receipt:${key}`, "social_replay", "9999-12-31 23:59:59");
+      if (inserted.changes === 0) return true;
     }
+    // Without a database, bound memory use. Cross-restart replay prevention
+    // requires the optional persistent database used by the runtime.
+    seen.set(key, true);
+    if (seen.size > 10_000) seen.delete(seen.keys().next().value!);
+    return false;
   }
 
   return {
@@ -131,7 +133,7 @@ export function createSocialClient(
           "X-Signature": pollAuth.signature,
           "X-Timestamp": pollAuth.timestamp,
         },
-        body: JSON.stringify({ cursor, limit }),
+        body: JSON.stringify({ cursor, limit: Math.min(Math.max(Math.floor(limit ?? 100), 1), 100) }),
         timeout: REQUEST_TIMEOUT_MS,
       });
 
@@ -142,40 +144,60 @@ export function createSocialClient(
         );
       }
 
-      const data = (await res.json()) as {
-        messages: Array<{
-          id: string;
-          from: string;
-          to: string;
-          content: string;
-          signedAt: string;
-          createdAt: string;
-          replyTo?: string;
-          nonce?: string;
-        }>;
-        next_cursor?: string;
-      };
-
-      // Phase 3.2: Replay protection for inbound messages
-      const filtered = data.messages.filter((m) => {
-        if (m.nonce && checkReplayNonce(m.nonce)) {
-          logger.warn(`Dropped replayed message: nonce=${m.nonce}`);
-          return false;
+      const data = (await res.json()) as { messages?: unknown; next_cursor?: unknown };
+      if (!Array.isArray(data.messages)) throw new Error("Invalid relay message batch");
+      if (data.messages.length > 100) throw new Error("Relay message batch exceeds requested limit");
+      const messages: InboxMessage[] = [];
+      const ownChain = detectChainType(account.address);
+      if (!ownChain) throw new Error("Invalid local social identity");
+      for (const candidate of data.messages) {
+        if (!candidate || typeof candidate !== "object") continue;
+        const m = candidate as Record<string, unknown>;
+        const signedAt = m.signed_at ?? m.signedAt;
+        if (typeof m.id !== "string" || m.id.length === 0 || m.id.length > 256 ||
+            typeof m.from !== "string" || typeof m.to !== "string" ||
+            typeof m.content !== "string" || typeof signedAt !== "string") continue;
+        const recipientChain = detectChainType(m.to);
+        if (recipientChain !== ownChain ||
+            normalizeAddress(m.to, ownChain) !== normalizeAddress(account.address, ownChain)) {
+          logger.warn("Dropped social message for a different recipient");
+          continue;
         }
-        return true;
-      });
+        // Validate shape and size independently of age. An offline agent must
+        // still be able to read its queued messages, without granting authority.
+        const validation = validateMessage({ from: m.from, to: m.to, content: m.content });
+        const timestamp = Date.parse(signedAt);
+        if (!validation.valid || !Number.isFinite(timestamp) || timestamp > Date.now() + 60_000) {
+          logger.warn("Dropped malformed social message");
+          continue;
+        }
+        let receipt: string;
+        if (m.signature !== undefined) {
+          if (typeof m.signature !== "string" || !await verifyMessageSignature({
+            to: m.to, content: m.content, signed_at: signedAt, signature: m.signature,
+          }, m.from)) {
+            logger.warn("Dropped social message with an invalid sender signature");
+            continue;
+          }
+          const senderChain = detectChainType(m.from)!;
+          receipt = JSON.stringify(["signed", normalizeAddress(m.from, senderChain),
+            canonicalSendMessage(m.to, m.content, signedAt)]);
+        } else {
+          // Legacy relays omit signatures. Keep messages usable as EXTERNAL
+          // data; no sender claim, even creatorAddress, grants permissions.
+          receipt = JSON.stringify(["legacy", m.id, m.from, m.to, m.content, signedAt]);
+        }
+        if (checkReplay(createHash("sha256").update(receipt).digest("hex"))) continue;
+        messages.push({
+          id: m.id, from: m.from, to: m.to, content: m.content, signedAt,
+          createdAt: typeof m.createdAt === "string" ? m.createdAt : signedAt,
+          replyTo: typeof m.replyTo === "string" ? m.replyTo : undefined,
+        });
+      }
 
       return {
-        messages: filtered.map((m) => ({
-          id: m.id,
-          from: m.from,
-          to: m.to,
-          content: m.content,
-          signedAt: m.signedAt,
-          createdAt: m.createdAt,
-          replyTo: m.replyTo,
-        })),
-        nextCursor: data.next_cursor,
+        messages,
+        nextCursor: typeof data.next_cursor === "string" ? data.next_cursor : undefined,
       };
     },
 

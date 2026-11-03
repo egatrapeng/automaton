@@ -1,5 +1,6 @@
 import OpenAI from "openai";
 import type { ChatMessage } from "../types.js";
+import { registerSecret, redactText, redactValue } from "../security/redaction.js";
 import {
   ProviderRegistry,
   type ModelTier,
@@ -80,7 +81,7 @@ class ProviderAttemptError extends Error {
       params.originalError instanceof Error
         ? params.originalError.message
         : String(params.originalError);
-    super(message);
+    super(redactText(message));
 
     this.providerId = params.providerId;
     this.retries = params.retries;
@@ -228,6 +229,7 @@ export class UnifiedInferenceClient {
     params: SharedChatParams,
   ): Promise<UnifiedInferenceResult> {
     const startedAt = Date.now();
+    registerSecret(client.apiKey);
     const payload = this.buildChatCompletionRequest(model.id, params);
     if (params.stream) {
       const stream = await client.chat.completions.create({
@@ -303,7 +305,7 @@ export class UnifiedInferenceClient {
       payload.response_format = params.responseFormat;
     }
 
-    return payload;
+    return redactValue(payload);
   }
 
   private async consumeStreamResponse(stream: AsyncIterable<any>): Promise<{
@@ -391,8 +393,8 @@ export class UnifiedInferenceClient {
     const totalCostCredits = inputCostCredits + outputCostCredits;
 
     return {
-      content: params.content,
-      toolCalls: params.toolCalls,
+      content: redactText(params.content),
+      toolCalls: params.toolCalls ? redactValue(params.toolCalls) : undefined,
       usage: params.usage,
       cost: {
         inputCostCredits,
@@ -466,10 +468,15 @@ export class UnifiedInferenceClient {
 
   private unwrapError(error: unknown): Error {
     if (error instanceof Error) {
-      return error;
+      // Preserve diagnostic fields/status while avoiding an SDK error carrying
+      // echoed credentials back into state or logs.
+      const safe = new Error(redactText(error.message));
+      safe.name = error.name;
+      safe.stack = error.stack ? redactText(error.stack) : undefined;
+      return Object.assign(safe, redactValue({ ...error }));
     }
 
-    return new Error(String(error));
+    return new Error(redactText(String(error)));
   }
 
   private isSurvivalMode(): boolean {

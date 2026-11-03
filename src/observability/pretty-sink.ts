@@ -8,6 +8,7 @@
 
 import chalk from "chalk";
 import type { LogEntry } from "../types.js";
+import { redactText, redactValue } from "../security/redaction.js";
 
 const accent = chalk.rgb(131, 127, 255);
 
@@ -68,6 +69,7 @@ function formatMessage(message: string): string {
 
 export function prettySink(entry: LogEntry): void {
   try {
+    entry = redactValue(entry);
     const time = formatTime(entry.timestamp);
     const levelFn = LEVEL_STYLES[entry.level] ?? chalk.white;
     const level = levelFn(entry.level.toUpperCase().padEnd(5));
@@ -82,6 +84,6 @@ export function prettySink(entry: LogEntry): void {
 
     process.stdout.write(line + "\n");
   } catch {
-    process.stdout.write(entry.message + "\n");
+    process.stdout.write(redactText(entry.message) + "\n");
   }
 }

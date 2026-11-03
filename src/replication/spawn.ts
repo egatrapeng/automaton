@@ -17,6 +17,7 @@ import type {
 import type { ChildLifecycle } from "./lifecycle.js";
 import { ulid } from "ulid";
 import { propagateConstitution } from "./constitution.js";
+import { childRuntimeInstallCommand, getRuntimeSource, type RuntimeSource } from "../self-mod/runtime-source.js";
 
 /** Valid Conway sandbox pricing tiers. */
 const SANDBOX_TIERS = [
@@ -76,12 +77,14 @@ export async function spawnChild(
   }
 
   const childId = ulid();
+  // Resolve the selected fork and immutable revision before creating paid resources.
+  const runtimeSource = getRuntimeSource();
   let sandboxId: string | undefined;
   let reusedSandbox: { id: string } | null = null;
 
   // If no lifecycle provided, use legacy path
   if (!lifecycle) {
-    return spawnChildLegacy(conway, identity, db, genesis, childId);
+    return spawnChildLegacy(conway, identity, db, genesis, childId, runtimeSource);
   }
 
   try {
@@ -127,11 +130,7 @@ export async function spawnChild(
     );
 
     // Install runtime (on the CHILD sandbox)
-    await childConway.exec("apt-get update -qq && apt-get install -y -qq nodejs npm git curl", 120_000);
-    await childConway.exec(
-      "git clone https://github.com/Conway-Research/automaton.git /root/automaton && cd /root/automaton && npm install && npm run build",
-      180_000,
-    );
+    await installChildRuntime(childConway, runtimeSource);
 
     // Write genesis configuration (on the CHILD sandbox)
     await childConway.exec("mkdir -p /root/.automaton", 10_000);
@@ -143,6 +142,7 @@ export async function spawnChild(
         creatorAddress: identity.address,
         parentAddress: identity.address,
         chainType: genesis.chainType || (identity as any).chainType || "evm",
+        runtimeSource,
       },
       null,
       2,
@@ -160,7 +160,7 @@ export async function spawnChild(
     lifecycle.transition(childId, "runtime_ready", "runtime installed");
 
     // Initialize child wallet (on the CHILD sandbox)
-    const initResult = await childConway.exec("node /root/automaton/dist/index.js --init 2>&1", 60_000);
+    const initResult = await childConway.exec("/opt/automaton-tools/node_modules/.bin/node /root/automaton/dist/index.js --init 2>&1", 60_000);
     // Extract child wallet address - support both EVM (0x...) and Solana (base58)
     const stdout = initResult.stdout || "";
     const evmMatch = stdout.match(/0x[a-fA-F0-9]{40}/);
@@ -191,7 +191,7 @@ export async function spawnChild(
       id: ulid(),
       timestamp: new Date().toISOString(),
       type: "child_spawn",
-      description: `Spawned child: ${genesis.name} in sandbox ${sandbox.id}${reusedSandbox ? " (reused)" : ""}`,
+      description: `Spawned child: ${genesis.name} in sandbox ${sandbox.id}${reusedSandbox ? " (reused)" : ""} from ${runtimeSource.repositoryUrl}@${runtimeSource.commit}`,
       reversible: false,
     });
 
@@ -244,6 +244,7 @@ async function spawnChildLegacy(
   db: AutomatonDatabase,
   genesis: GenesisConfig,
   childId: string,
+  runtimeSource: RuntimeSource,
 ): Promise<ChildAutomaton> {
   let sandboxId: string | undefined;
 
@@ -264,14 +265,7 @@ async function spawnChildLegacy(
     // Create a scoped client so all exec/writeFile calls target the CHILD sandbox
     const childConway = conway.createScopedClient(sandbox.id);
 
-    await childConway.exec(
-      "apt-get update -qq && apt-get install -y -qq nodejs npm git curl",
-      120_000,
-    );
-    await childConway.exec(
-      "git clone https://github.com/Conway-Research/automaton.git /root/automaton && cd /root/automaton && npm install && npm run build",
-      180_000,
-    );
+    await installChildRuntime(childConway, runtimeSource);
     await childConway.exec("mkdir -p /root/.automaton", 10_000);
 
     const legacyGenesisJson = JSON.stringify(
@@ -282,6 +276,7 @@ async function spawnChildLegacy(
         creatorAddress: identity.address,
         parentAddress: identity.address,
         chainType: genesis.chainType || (identity as any).chainType || "evm",
+        runtimeSource,
       },
       null,
       2,
@@ -294,7 +289,7 @@ async function spawnChildLegacy(
       // Constitution file not found
     }
 
-    const initResult = await childConway.exec("node /root/automaton/dist/index.js --init 2>&1", 60_000);
+    const initResult = await childConway.exec("/opt/automaton-tools/node_modules/.bin/node /root/automaton/dist/index.js --init 2>&1", 60_000);
     const legacyParentChainType = genesis.chainType || (identity as any).chainType || "evm";
     const legacyEvmMatch = (initResult.stdout || "").match(/0x[a-fA-F0-9]{40}/);
     const legacySolMatch = (initResult.stdout || "").match(/[1-9A-HJ-NP-Za-km-z]{32,44}/);
@@ -325,7 +320,7 @@ async function spawnChildLegacy(
       id: ulid(),
       timestamp: new Date().toISOString(),
       type: "child_spawn",
-      description: `Spawned child: ${genesis.name} in sandbox ${sandbox.id}`,
+      description: `Spawned child: ${genesis.name} in sandbox ${sandbox.id} from ${runtimeSource.repositoryUrl}@${runtimeSource.commit}`,
       reversible: false,
     });
 
@@ -333,6 +328,18 @@ async function spawnChildLegacy(
   } catch (error) {
     // Sandbox deletion disabled — failed sandboxes left for potential reuse.
     throw error;
+  }
+}
+
+async function installChildRuntime(conway: ConwayClient, source: RuntimeSource): Promise<void> {
+  for (const [command, timeout] of [
+    ["apt-get update -qq && apt-get install -y -qq ca-certificates nodejs npm git curl", 120_000],
+    [childRuntimeInstallCommand(source), 180_000],
+  ] as const) {
+    const result = await conway.exec(command, timeout);
+    if (result.exitCode !== 0) {
+      throw new Error(`Child runtime installation failed: ${result.stderr || result.stdout || result.exitCode}`);
+    }
   }
 }
 

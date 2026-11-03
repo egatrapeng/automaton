@@ -19,6 +19,15 @@ import {
 } from "./mocks.js";
 import type { AutomatonDatabase, AgentTurn, AgentState } from "../types.js";
 
+// Loop behavior is exercised with mocked providers. Balance/discovery RPCs must
+// not depend on a live blockchain, network allowlist, or request retry delays.
+vi.mock("../conway/x402.js", () => ({ getUsdcBalance: vi.fn(async () => 0) }));
+vi.mock("../registry/erc8004.js", () => ({
+  getTotalAgents: vi.fn(async () => 0),
+  getRegisteredAgentsByEvents: vi.fn(async () => []),
+  queryAgent: vi.fn(async () => null),
+}));
+
 describe("Agent Loop", () => {
   let db: AutomatonDatabase;
   let conway: MockConwayClient;
@@ -191,7 +200,7 @@ describe("Agent Loop", () => {
       (t) => t.input?.includes("Hello from another agent!"),
     );
     expect(inboxTurn).toBeDefined();
-    expect(inboxTurn!.inputSource).toBe("agent");
+    expect(inboxTurn!.inputSource).toBe("external");
   });
 
   it("MAX_TOOL_CALLS_PER_TURN limits tool calls", async () => {

@@ -15,6 +15,7 @@ import type {
   InferenceToolDefinition,
 } from "../types.js";
 import { ResilientHttpClient } from "./http-client.js";
+import { registerSecrets, redactText, redactValue } from "../security/redaction.js";
 
 const INFERENCE_TIMEOUT_MS = 60_000;
 
@@ -49,6 +50,7 @@ export function createInferenceClient(
   options: InferenceClientOptions,
 ): InferenceClient {
   const { apiUrl, apiKey, openaiApiKey, anthropicApiKey, ollamaBaseUrl, getModelProvider } = options;
+  registerSecrets(apiKey, openaiApiKey, anthropicApiKey);
   const httpClient = new ResilientHttpClient({
     baseTimeout: INFERENCE_TIMEOUT_MS,
     retryableStatuses: [429, 500, 502, 503, 504],
@@ -62,7 +64,10 @@ export function createInferenceClient(
     opts?: InferenceOptions,
   ): Promise<InferenceResponse> => {
     const model = opts?.model || currentModel;
-    const tools = opts?.tools;
+    // Authentication stays in request headers; credentials accidentally read by
+    // a tool must not become provider prompt data. Do not mutate caller history.
+    messages = redactValue(messages);
+    const tools = opts?.tools ? redactValue(opts.tools) : undefined;
 
     const backend = resolveInferenceBackend(model, {
       openaiApiKey,
@@ -217,18 +222,18 @@ async function chatViaOpenAiCompatible(params: {
           ? `Bearer ${params.apiKey}`
           : params.apiKey,
     },
-    body: JSON.stringify(params.body),
+    body: JSON.stringify(redactValue(params.body)),
     timeout: INFERENCE_TIMEOUT_MS,
   });
 
   if (!resp.ok) {
     const text = await resp.text();
     throw new Error(
-      `Inference error (${params.backend}): ${resp.status}: ${text}`,
+      redactText(`Inference error (${params.backend}): ${resp.status}: ${text}`),
     );
   }
 
-  const data = await resp.json() as any;
+  const data = redactValue(await resp.json()) as any;
   const choice = data.choices?.[0];
 
   if (!choice) {
@@ -309,16 +314,16 @@ async function chatViaAnthropic(params: {
       "x-api-key": params.anthropicApiKey,
       "anthropic-version": "2023-06-01",
     },
-    body: JSON.stringify(body),
+    body: JSON.stringify(redactValue(body)),
     timeout: INFERENCE_TIMEOUT_MS,
   });
 
   if (!resp.ok) {
     const text = await resp.text();
-    throw new Error(`Inference error (anthropic): ${resp.status}: ${text}`);
+    throw new Error(redactText(`Inference error (anthropic): ${resp.status}: ${text}`));
   }
 
-  const data = await resp.json() as any;
+  const data = redactValue(await resp.json()) as any;
   const content = Array.isArray(data.content) ? data.content : [];
   const textBlocks = content.filter((c: any) => c?.type === "text");
   const toolUseBlocks = content.filter((c: any) => c?.type === "tool_use");

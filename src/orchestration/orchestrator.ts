@@ -28,6 +28,7 @@ import { UnifiedInferenceClient } from "../inference/inference-client.js";
 import { reviewPlan } from "./plan-mode.js";
 import { buildPlannerContext, getNextPlannerVersion, persistPlannerArtifacts } from "./planner-context.js";
 import { AgentWorkspace } from "./workspace.js";
+import { getGoalInputSource } from "../security/input-provenance.js";
 import {
   getActiveGoals,
   getGoalById,
@@ -194,8 +195,10 @@ export class Orchestrator {
 
   async matchTaskToAgent(task: TaskNode): Promise<AgentAssignment> {
     const requestedRole = task.agentRole?.trim() || "generalist";
+    const external = getGoalInputSource(this.params.db, task.goalId) === "external";
+    const permitted = (address: string) => !external || address.startsWith("local://") || address === this.params.identity?.address;
 
-    const idleAgents = this.params.agentTracker.getIdle();
+    const idleAgents = this.params.agentTracker.getIdle().filter((agent) => permitted(agent.address));
     const directRoleMatch = idleAgents.find((agent) => agent.role === requestedRole);
     if (directRoleMatch) {
       return {
@@ -206,7 +209,7 @@ export class Orchestrator {
     }
 
     const bestIdle = this.params.agentTracker.getBestForTask(requestedRole);
-    if (bestIdle) {
+    if (bestIdle && permitted(bestIdle.address)) {
       return {
         agentAddress: bestIdle.address,
         agentName: bestIdle.name,
@@ -220,7 +223,7 @@ export class Orchestrator {
     }
 
     const reassigned = this.findBusyAgentForReassign();
-    if (reassigned) {
+    if (reassigned && permitted(reassigned.address)) {
       return {
         agentAddress: reassigned.address,
         agentName: reassigned.name,
@@ -247,6 +250,9 @@ export class Orchestrator {
   }
 
   async fundAgentForTask(addr: string, task: TaskNode): Promise<void> {
+    if (getGoalInputSource(this.params.db, task.goalId) === "external") {
+      throw new Error("External task cannot authorize a direct child funding transfer; use local delegation");
+    }
     const estimated = Math.max(0, task.metadata.estimatedCostCents);
     const configuredDefault = Number(this.params.config?.defaultTaskFundingCents ?? DEFAULT_TASK_FUNDING_CENTS);
     const amountCents = Math.max(estimated, Number.isFinite(configuredDefault) ? configuredDefault : 0);
@@ -871,7 +877,8 @@ export class Orchestrator {
       return null;
     }
 
-    const spawn = this.params.config?.spawnAgent;
+    const external = getGoalInputSource(this.params.db, task.goalId) === "external";
+    const spawn = external ? this.params.config?.spawnLocalAgent : this.params.config?.spawnAgent;
     if (typeof spawn !== "function") {
       return null;
     }

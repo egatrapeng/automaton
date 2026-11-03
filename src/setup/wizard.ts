@@ -157,6 +157,7 @@ export async function runSetupWizard(): Promise<AutomatonConfig> {
     console.log(chalk.green(`  Conway sandbox detected: ${env.sandboxId}\n`));
   } else {
     console.log(chalk.dim(`  Environment: ${env.type} (no sandbox detected)\n`));
+    console.log(chalk.yellow("  Execution target: host administration. Tools will use this VPS account's privileges; this is not an isolated sandbox.\n"));
   }
 
   // ─── 5. Write config + heartbeat + SOUL.md + skills ───────────

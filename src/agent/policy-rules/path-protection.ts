@@ -9,6 +9,7 @@
 import path from "path";
 import type { PolicyRule, PolicyRequest, PolicyRuleResult } from "../../types.js";
 import { isProtectedFile } from "../../self-mod/code.js";
+import { isSensitivePath } from "../../security/files.js";
 
 /** Sensitive files that must not be read by the agent */
 const SENSITIVE_READ_PATTERNS: string[] = [
@@ -37,6 +38,7 @@ function deny(rule: string, reasonCode: string, humanMessage: string): PolicyRul
  * Check if a file path matches a sensitive read pattern.
  */
 export function isSensitiveFile(filePath: string): boolean {
+  if (isSensitivePath(filePath)) return true;
   const resolved = path.resolve(filePath);
   const basename = path.basename(resolved);
 

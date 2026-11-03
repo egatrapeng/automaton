@@ -279,10 +279,7 @@ describe("Social Client", () => {
     );
 
     // Mock fetch to capture the request body
-    const mockFetch = vi.fn().mockResolvedValue({
-      ok: true,
-      json: () => Promise.resolve({ id: "msg-123" }),
-    });
+    const mockFetch = vi.fn(async () => Response.json({ id: "msg-123" }));
     vi.stubGlobal("fetch", mockFetch);
 
     const client = createSocialClient("https://relay.example.com", account);
@@ -308,12 +305,7 @@ describe("Social Client", () => {
       "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
     );
 
-    const mockFetch = vi.fn().mockResolvedValue({
-      ok: false,
-      status: 500,
-      statusText: "Internal Server Error",
-      json: () => Promise.resolve({ error: "server error" }),
-    });
+    const mockFetch = vi.fn(async () => Response.json({ error: "server error" }, { status: 400 }));
     vi.stubGlobal("fetch", mockFetch);
 
     const client = createSocialClient("https://relay.example.com", account);
@@ -329,10 +321,7 @@ describe("Social Client", () => {
       "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
     );
 
-    const mockFetch = vi.fn().mockResolvedValue({
-      ok: true,
-      json: () => Promise.resolve({ id: "msg-xxx" }),
-    });
+    const mockFetch = vi.fn(async () => Response.json({ id: "msg-xxx" }));
     vi.stubGlobal("fetch", mockFetch);
 
     const client = createSocialClient("https://relay.example.com", account);
@@ -360,18 +349,13 @@ describe("Social Client", () => {
       "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
     );
 
-    // Server returns 500 for every request
-    const mockFetch = vi.fn().mockResolvedValue({
-      ok: false,
-      status: 500,
-      statusText: "Internal Server Error",
-      json: () => Promise.resolve({ error: "server error" }),
-    });
+    // A non-retryable error isolates attempt accounting from HTTP backoff.
+    const mockFetch = vi.fn(async () => Response.json({ error: "server error" }, { status: 400 }));
     vi.stubGlobal("fetch", mockFetch);
 
     const client = createSocialClient("https://relay.example.com", account);
 
-    // Send 100 messages that all fail with 500
+    // Send 100 messages that all fail.
     for (let i = 0; i < 100; i++) {
       await client
         .send("0x70997970C51812dc3A010C7d01b50e0d17dc79C8", `msg ${i}`)

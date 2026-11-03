@@ -304,6 +304,14 @@ async function configureGeneral(config: AutomatonConfig): Promise<void> {
   config.maxChildren = await askNumber("Max child automatons", config.maxChildren);
   config.socialRelayUrl = (await askString("Social relay URL", config.socialRelayUrl)) || undefined;
   config.rpcUrl = (await askString("RPC endpoint  (Base chain, e.g. https://mainnet.base.org)", config.rpcUrl)) || undefined;
+  config.execution = {
+    ...config.execution,
+    mode: await askChoice("Execution target", ["host", "remote"], config.execution?.mode ?? (config.sandboxId ? "remote" : "host")),
+  };
+  if (config.execution.mode === "host") console.log(chalk.yellow("  Host mode administers this VPS with the runtime's privileges; it is not isolated."));
+  if (config.execution.mode === "remote" && !config.sandboxId) {
+    config.sandboxId = await askRequiredString("Conway sandbox ID (required for remote execution)", config.sandboxId);
+  }
 
   console.log("");
 }

@@ -17,6 +17,7 @@ import type { WalletData } from "../types.js";
 import type { ChainType } from "./chain.js";
 import { EvmChainIdentity, SolanaChainIdentity } from "./chain.js";
 import type { ChainIdentity } from "./chain.js";
+import { registerSecrets } from "../security/redaction.js";
 
 /**
  * Create a stub PrivateKeyAccount for Solana wallets.
@@ -61,6 +62,7 @@ export function getWalletPath(): string {
  */
 export function generateSolanaKeypair(): { secretKey: Uint8Array; publicKey: Uint8Array; address: string } {
   const keypair = nacl.sign.keyPair();
+  registerSecrets(bs58.encode(keypair.secretKey));
   return {
     secretKey: keypair.secretKey,
     publicKey: keypair.publicKey,
@@ -88,6 +90,7 @@ export async function getWallet(chainType?: ChainType): Promise<{
     const walletData: WalletData = JSON.parse(
       fs.readFileSync(WALLET_FILE, "utf-8"),
     );
+    registerSecrets(walletData.privateKey, walletData.secretKey);
     const resolvedChainType = walletData.chainType || "evm";
 
     if (resolvedChainType === "solana" && walletData.secretKey) {
@@ -125,6 +128,7 @@ export async function getWallet(chainType?: ChainType): Promise<{
 
   // EVM wallet
   const privateKey = generatePrivateKey();
+  registerSecrets(privateKey);
   const account = privateKeyToAccount(privateKey);
 
   const walletData: WalletData = {
@@ -151,6 +155,7 @@ export function getWalletAddress(): string | null {
   const walletData: WalletData = JSON.parse(
     fs.readFileSync(WALLET_FILE, "utf-8"),
   );
+  registerSecrets(walletData.privateKey, walletData.secretKey);
 
   if (walletData.chainType === "solana" && walletData.secretKey) {
     const secretKey = bs58.decode(walletData.secretKey);
@@ -174,6 +179,7 @@ export function loadWalletAccount(): PrivateKeyAccount | null {
   const walletData: WalletData = JSON.parse(
     fs.readFileSync(WALLET_FILE, "utf-8"),
   );
+  registerSecrets(walletData.privateKey, walletData.secretKey);
 
   if (walletData.chainType === "solana") {
     // Solana wallets don't have a PrivateKeyAccount; callers should use getWallet() instead
@@ -194,6 +200,7 @@ export function getWalletChainType(): ChainType {
     const walletData: WalletData = JSON.parse(
       fs.readFileSync(WALLET_FILE, "utf-8"),
     );
+    registerSecrets(walletData.privateKey, walletData.secretKey);
     return walletData.chainType || "evm";
   } catch {
     return "evm";

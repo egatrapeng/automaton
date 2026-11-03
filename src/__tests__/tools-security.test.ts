@@ -652,14 +652,21 @@ describe("package install inline validation", () => {
 
   it("install_npm_package allows clean package names", async () => {
     const tool = tools.find((t) => t.name === "install_npm_package")!;
-    await tool.execute({ package: "axios" }, ctx);
-    expect(conway.execCalls.length).toBe(1);
-    expect(conway.execCalls[0].command).toBe("npm install -g axios");
+    vi.spyOn(conway, "exec")
+      .mockResolvedValueOnce({ exitCode: 0, stderr: "", stdout: JSON.stringify({ version: "1.2.3", "dist.integrity": `sha512-${Buffer.alloc(64, 1).toString("base64")}` }) })
+      .mockResolvedValueOnce({ exitCode: 0, stderr: "", stdout: "installed" });
+    const result = await tool.execute({ package: "axios" }, ctx);
+    expect(result).toContain("Installed from verified registry archive");
+    expect(db.getInstalledTools().some(entry => entry.name === "axios")).toBe(true);
   });
 
   it("install_npm_package allows scoped packages", async () => {
     const tool = tools.find((t) => t.name === "install_npm_package")!;
-    await tool.execute({ package: "@conway/automaton" }, ctx);
-    expect(conway.execCalls.length).toBe(1);
+    vi.spyOn(conway, "exec")
+      .mockResolvedValueOnce({ exitCode: 0, stderr: "", stdout: JSON.stringify({ version: "1.2.3", "dist.integrity": `sha512-${Buffer.alloc(64, 1).toString("base64")}` }) })
+      .mockResolvedValueOnce({ exitCode: 0, stderr: "", stdout: "installed" });
+    const result = await tool.execute({ package: "@conway/automaton" }, ctx);
+    expect(result).toContain("Installed from verified registry archive");
+    expect(db.getInstalledTools().some(entry => entry.name === "@conway/automaton")).toBe(true);
   });
 });

@@ -1,7 +1,8 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import * as x402 from "../../conway/x402.js";
 import { GeneralHarness } from "../../agent/harnesses/general-harness.js";
 import { PolicyEngine } from "../../agent/policy-engine.js";
 import { createFinancialRules } from "../../agent/policy-rules/financial.js";
@@ -17,6 +18,7 @@ describe("agent/GeneralHarness", () => {
   let tempDir: string | undefined;
 
   afterEach(() => {
+    vi.restoreAllMocks();
     if (tempDir) {
       rmSync(tempDir, { recursive: true, force: true });
       tempDir = undefined;
@@ -120,6 +122,7 @@ describe("agent/GeneralHarness", () => {
   });
 
   it("routes the web_fetch SPEC alias through the current x402_fetch surface", async () => {
+    vi.spyOn(x402, "x402Fetch").mockResolvedValue({ success: true, response: "PUBLIC_TEST_RESPONSE", status: 200 });
     const { harness, appDb } = await createHarness();
     const aliasTool = harness.getToolDefs().find((tool) => tool.name === "web_fetch");
     const wrappedTool = harness.getToolDefs().find((tool) => tool.name === "x402_fetch");

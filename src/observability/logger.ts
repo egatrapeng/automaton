@@ -8,6 +8,7 @@
 
 import type { LogLevel, LogEntry } from "../types.js";
 import { LOG_LEVEL_PRIORITY } from "../types.js";
+import { redactText, redactValue } from "../security/redaction.js";
 
 let globalLogLevel: LogLevel = "info";
 let customSink: ((entry: LogEntry) => void) | null = null;
@@ -76,21 +77,21 @@ export class StructuredLogger {
       const entry: LogEntry = {
         timestamp: new Date().toISOString(),
         level,
-        module: this.module,
-        message,
+        module: redactText(this.module),
+        message: redactText(message),
       };
 
       if (context && Object.keys(context).length > 0) {
-        entry.context = context;
+        entry.context = redactValue(context);
       }
 
       if (error) {
         entry.error = {
-          message: error.message,
-          stack: error.stack,
+          message: redactText(error.message),
+          stack: error.stack ? redactText(error.stack) : undefined,
         };
         if ((error as any).code) {
-          entry.error.code = (error as any).code;
+          entry.error.code = redactText(String((error as any).code));
         }
       }
 
@@ -104,7 +105,7 @@ export class StructuredLogger {
     } catch {
       // Fallback if JSON serialization fails
       try {
-        process.stderr.write(`[logger-fallback] ${message}\n`);
+        process.stderr.write(`[logger-fallback] ${redactText(message)}\n`);
       } catch {
         // Completely silent — never throw from logger
       }
