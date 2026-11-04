@@ -82,7 +82,7 @@ describe("Claude without Conway", () => {
 
   it("never sends an assistant-final conversation (no prefill) to Anthropic", async () => {
     const config = configuration();
-    const fetch = vi.spyOn(globalThis, "fetch").mockResolvedValue(Response.json({ id: "p-1", model: config.inferenceModel,
+    const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async () => Response.json({ id: "p-1", model: config.inferenceModel,
       content: [{ type: "text", text: "ok" }], usage: { input_tokens: 5, output_tokens: 1 }, stop_reason: "end_turn" }));
     const inference = createInferenceClient({ apiUrl: config.conwayApiUrl, apiKey: "", defaultModel: config.inferenceModel, maxTokens: 256, anthropicApiKey: config.anthropicApiKey });
     await inference.chat([{ role: "system", content: "rules" }, { role: "user", content: "[wakeup] start" },
