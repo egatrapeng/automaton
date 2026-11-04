@@ -109,3 +109,11 @@ Le diagnostic public sur Hostinger et le déploiement sur les deux VPS restent �
 effectuer avec les [commandes de déploiement](TRADING_V1.fr.md). Aucun ordre de
 production ou rendement réel n'est attesté par ces tests. Le raccordement du
 dashboard existant est décrit pour son backend extérieur à ce dépôt.
+
+Correctif du coût d'inférence dans le rapport trading : lecture de
+`inference_costs` avec la même fonction et les mêmes bornes UTC que le contrôle
+budgétaire du routeur, au lieu de `spend_tracking`. Les 118 tests ciblés
+(routeur, moteur trading et rapport) passent, ainsi que le typage et la
+compilation. Quatre nouveaux tests couvrent les 293 centimes absents de l'autre
+table, le changement de jour UTC, une source indisponible et un jour sans coût.
+Ce correctif d'affichage ne modifie ni plafond ni décision de trading.

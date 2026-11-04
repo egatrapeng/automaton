@@ -5,6 +5,7 @@ import type { AutomatonConfig, AutomatonDatabase, AutomatonTool, ToolContext } f
 import { guardianFor } from "../wallet-guardian/client.js";
 import { fetchTokenResearch } from "./market.js";
 import { agentkitRead } from "./agentkit.js";
+import { inferenceGetDailyCost } from "../state/database.js";
 
 /** Sanitized data only; a dashboard may read this file without receiving a wallet capability. */
 export async function syncTradingReport(config: AutomatonConfig, db?: AutomatonDatabase): Promise<unknown> {
@@ -22,12 +23,14 @@ export async function syncTradingReport(config: AutomatonConfig, db?: AutomatonD
 }
 function inferenceBudget(ctx: Pick<ToolContext, "config" | "db">) {
   const dailyLimitCents = ctx.config.treasuryPolicy?.maxInferenceDailyCents ?? null;
+  const dayUtc = new Date().toISOString().slice(0, 10);
   let recordedCents: number | null = null;
   try {
-    const row = ctx.db.raw.prepare("SELECT SUM(amount_cents) AS total FROM spend_tracking WHERE category='inference' AND window_day=?").get(new Date().toISOString().slice(0, 10)) as { total: number | null };
-    recordedCents = row.total ?? 0;
+    // Use the same ledger and UTC boundary as the router's actual budget gate.
+    // spend_tracking is a separate ledger; inference is recorded in inference_costs.
+    recordedCents = inferenceGetDailyCost(ctx.db.raw, dayUtc);
   } catch { /* Unknown is never zero. Existing budget tracker remains authoritative. */ }
-  return { dailyLimitCents, recordedCents, remainingEstimateCents: dailyLimitCents !== null && recordedCents !== null ? Math.max(0, dailyLimitCents - recordedCents) : null,
+  return { dailyLimitCents, recordedCents, dayUtc, source: "inference_costs", remainingEstimateCents: dailyLimitCents !== null && recordedCents !== null ? Math.max(0, dailyLimitCents - recordedCents) : null,
     note: "Provider invoice separate. Wallet capital does not replenish the Anthropic API budget." };
 }
 export function tradingTools(): AutomatonTool[] {
