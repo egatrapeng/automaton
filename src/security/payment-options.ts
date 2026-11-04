@@ -8,6 +8,7 @@ import type { PaymentSecurityOptions } from "../conway/x402.js";
 export function paymentOptionsFor(config: AutomatonConfig, balanceAtomic?: bigint): PaymentSecurityOptions {
   const policy = config.treasuryPolicy ?? DEFAULT_TREASURY_POLICY;
   return {
+    beforeSign: config.walletGuardian ? () => { throw new Error("Local crypto signing disabled in guardian mode; use the independent guardian with QQOQCCP authorization"); } : undefined,
     ledgerPath: path.join(path.dirname(resolvePath(config.dbPath)), "payment-ledger.db"),
     allowedRecipients: policy.x402AllowedRecipients,
     budget: {

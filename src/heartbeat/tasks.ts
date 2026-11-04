@@ -24,6 +24,7 @@ import { AlertEngine, createDefaultAlertRules } from "../observability/alerts.js
 import { metricsInsertSnapshot, metricsPruneOld } from "../state/database.js";
 import { ulid } from "ulid";
 import { paymentOptionsFor } from "../security/payment-options.js";
+import { syncGuardianJournal } from "../wallet-guardian/client.js";
 
 const logger = createLogger("heartbeat.tasks");
 
@@ -45,6 +46,10 @@ export const COLONY_TASK_INTERVALS_MS = {
 } as const;
 
 export const BUILTIN_TASKS: Record<string, HeartbeatTaskFn> = {
+  wallet_guardian_notifications: async (_ctx, taskCtx) => {
+    await syncGuardianJournal(taskCtx.config);
+    return { shouldWake: false };
+  },
   heartbeat_ping: async (ctx: TickContext, taskCtx: HeartbeatLegacyContext) => {
     // Use ctx.creditBalance instead of calling conway.getCreditsBalance()
     const credits = ctx.creditBalance;
@@ -147,6 +152,7 @@ export const BUILTIN_TASKS: Record<string, HeartbeatTaskFn> = {
   },
 
   check_usdc_balance: async (ctx: TickContext, taskCtx: HeartbeatLegacyContext) => {
+    if (taskCtx.config.walletGuardian) return { shouldWake: false };
     // Use ctx.usdcBalance instead of calling getUsdcBalance()
     const balance = ctx.usdcBalance;
     const credits = ctx.creditBalance;

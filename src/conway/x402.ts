@@ -79,6 +79,8 @@ export interface X402PaymentResult {
 }
 
 export interface PaymentSecurityOptions {
+  /** Independent policy check after actual quote validation/reservation, BEFORE any signature. */
+  beforeSign?: (quote: PaymentAuthorizationQuote) => void | Promise<void>;
   ledger?: PaymentLedger;
   ledgerPath?: string;
   operationId?: string;
@@ -88,6 +90,15 @@ export interface PaymentSecurityOptions {
   maxAuthorizationSeconds?: number;
   /** Public-only for agent-chosen URLs; configured for operator-selected backends. */
   networkPolicy?: "public" | "configured";
+}
+
+export interface PaymentAuthorizationQuote {
+  operationId: string;
+  url: string;
+  network: string;
+  recipient: string;
+  amountAtomic: string;
+  validUntil: number;
 }
 
 export interface UsdcBalanceResult {
@@ -400,6 +411,8 @@ export async function x402Fetch(
     reservationCreated = true;
     paymentInfo = { operationId, amountAtomic: amountAtomic.toString(), amountCents,
       recipient: parsed.requirement.payToAddress, network: parsed.requirement.network, state: "reserved", validUntil };
+    await security.beforeSign?.({ operationId, url, network: parsed.requirement.network,
+      recipient: parsed.requirement.payToAddress, amountAtomic: amountAtomic.toString(), validUntil });
     // Persist uncertainty before invoking a signer: a crash after signature creation must not release budget.
     ledger.setState(operationId, "authorized");
     signingStarted = true;

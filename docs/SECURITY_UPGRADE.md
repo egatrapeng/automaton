@@ -6,6 +6,12 @@ Elle ne transforme pas un agent administrateur de son propre serveur en système
 isolé de ce serveur. Aucun déploiement ni paiement réel n'a été effectué pendant
 le développement et les tests.
 
+Pour conserver cette administration tout en isolant la clé du portefeuille de
+financement, le mode optionnel [Wallet Guardian](WALLET_GUARDIAN.md) ajoute un
+signataire sur un hôte indépendant, des décisions QQOQCCP, des missions bornées
+et un journal local. Il reste à installer explicitement ; le portefeuille
+d'identité présent sur le VPS n'acquiert pas cette protection.
+
 ## Modèle de menace et frontières
 
 Actifs : clés de portefeuille et API, données métier, historique, budget et accès

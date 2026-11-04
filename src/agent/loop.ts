@@ -101,7 +101,10 @@ export async function runAgentLoop(
     options;
 
   validateStandalone(config);
-  const builtinTools = isStandalone(config) ? standaloneTools(createBuiltinTools(identity.sandboxId)) : createBuiltinTools(identity.sandboxId);
+  const availableTools = createBuiltinTools(identity.sandboxId).filter(tool => config.walletGuardian
+    ? tool.name !== "topup_credits"
+    : !tool.name.startsWith("wallet_guardian_") && !["wallet_withdraw", "wallet_execute_withdrawal"].includes(tool.name));
+  const builtinTools = isStandalone(config) ? standaloneTools(availableTools) : availableTools;
   const installedTools = loadInstalledTools(db);
   const tools = [...builtinTools, ...installedTools];
   const toolContext: ToolContext = {
@@ -461,7 +464,7 @@ export async function runAgentLoop(
         // available, buy credits NOW — before attempting inference.
         // This prevents the agent from dying mid-loop while waiting for
         // the heartbeat to fire. Uses a 60s cooldown to avoid hammering.
-        if ((tier === "critical" || tier === "low_compute") && financial.usdcBalance >= 5) {
+        if (!config.walletGuardian && (tier === "critical" || tier === "low_compute") && financial.usdcBalance >= 5) {
           const INLINE_TOPUP_COOLDOWN_MS = 60_000;
           const lastInlineTopup = db.getKV("last_inline_topup_attempt");
           const cooldownExpired = !lastInlineTopup ||

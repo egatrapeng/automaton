@@ -26,6 +26,10 @@ import { isSensitivePath } from "../security/files.js";
 import { redactText, redactValue } from "../security/redaction.js";
 import { setGoalInputSource } from "../security/input-provenance.js";
 import { paymentOptionsFor } from "../security/payment-options.js";
+import { guardianFor } from "../wallet-guardian/client.js";
+import { guardianTools, journalAfter, QQOQCCP_SCHEMA } from "../wallet-guardian/tools.js";
+import type { Qqoqccp } from "../wallet-guardian/types.js";
+import type { X402PaymentResult } from "../conway/x402.js";
 
 const logger = createLogger("tools");
 
@@ -277,7 +281,7 @@ export function createBuiltinTools(sandboxId: string): AutomatonTool[] {
         const { getUsdcBalance } = await import("../conway/x402.js");
         const chainType = ctx.config.chainType || ctx.identity.chainType || "evm";
         const network = chainType === "solana" ? "solana:mainnet" : "eip155:8453";
-        const balance = await getUsdcBalance(ctx.identity.address, network, chainType);
+        const balance = await getUsdcBalance(ctx.config.walletGuardian?.walletAddress ?? ctx.identity.address, network, chainType);
         const networkLabel = chainType === "solana" ? "Solana" : "Base";
         return `USDC balance: ${balance.toFixed(6)} USDC on ${networkLabel}`;
       },
@@ -301,6 +305,7 @@ export function createBuiltinTools(sandboxId: string): AutomatonTool[] {
         required: ["amount_usd"],
       },
       execute: async (args, ctx) => {
+        if (ctx.config.walletGuardian) return "Legacy local-wallet recharge is disabled in guardian mode. Use x402_fetch through the guardian with an approved plan and QQOQCCP review.";
         // Solana guard: x402 topup is EVM-only
         const chainType = ctx.config.chainType || ctx.identity.chainType || "evm";
         if (chainType === "solana") {
@@ -2704,7 +2709,7 @@ Model: ${ctx.inference.getDefaultModel()}
     {
       name: "x402_fetch",
       description:
-        "Fetch a URL with automatic x402 USDC payment. If the server responds with HTTP 402, signs a USDC payment and retries. Use this to access paid APIs and services.",
+        "Fetch a URL with x402 USDC payment. With wallet guardian configured, requires a stable operation_id and QQOQCCP review referencing an owner-approved mission and evidence. The independent signer enforces the actual quote and budgets; there is no local signing fallback.",
       category: "financial",
       riskLevel: "dangerous",
       parameters: {
@@ -2715,6 +2720,7 @@ Model: ${ctx.inference.getDefaultModel()}
             description: "The URL to fetch",
           },
           operation_id: { type: "string", description: "Stable identifier for this purchase; reuse on retries to prevent duplicate signing" },
+          review: QQOQCCP_SCHEMA,
           method: {
             type: "string",
             description: "HTTP method (default: GET)",
@@ -2749,24 +2755,35 @@ Model: ${ctx.inference.getDefaultModel()}
         const maxPayment =
           ctx.config.treasuryPolicy?.maxX402PaymentCents ??
           DEFAULT_TREASURY_POLICY.maxX402PaymentCents;
-        const security = paymentOptionsFor(ctx.config);
-        security.operationId = args.operation_id as string | undefined;
-        if ((security.budget?.minimumReserveCents ?? 0) > 0) {
-          const { getUsdcBalanceDetailed } = await import("../conway/x402.js");
-          const balance = await getUsdcBalanceDetailed(ctx.identity.address as `0x${string}`);
-          if (!balance.ok || balance.balanceAtomic === undefined) return "x402 fetch failed: Cannot enforce configured USDC reserve without a verified balance";
-          security.budget!.balanceAtomic = BigInt(balance.balanceAtomic);
+        let result: X402PaymentResult;
+        if (ctx.config.walletGuardian) {
+          if (typeof args.operation_id !== "string" || !args.operation_id) throw new Error("Guardian requests require a stable operation_id; do not invent a new ID to retry an uncertain payment");
+          try {
+            result = await guardianFor(ctx.config).service({ operationId: args.operation_id, url, method, body,
+              headers: extraHeaders, maxPaymentCents: maxPayment, minimumUsdcReserveCents: ctx.config.treasuryPolicy?.minimumUsdcReserveCents ?? 0,
+              allowedRecipients: ctx.config.treasuryPolicy?.x402AllowedRecipients,
+              review: args.review as Qqoqccp | undefined });
+          } finally { await journalAfter(ctx); }
+        } else {
+          const security = paymentOptionsFor(ctx.config);
+          security.operationId = args.operation_id as string | undefined;
+          if ((security.budget?.minimumReserveCents ?? 0) > 0) {
+            const { getUsdcBalanceDetailed } = await import("../conway/x402.js");
+            const balance = await getUsdcBalanceDetailed(ctx.identity.address as `0x${string}`);
+            if (!balance.ok || balance.balanceAtomic === undefined) return "x402 fetch failed: Cannot enforce configured USDC reserve without a verified balance";
+            security.budget!.balanceAtomic = BigInt(balance.balanceAtomic);
+          }
+          result = await x402Fetch(
+            url,
+            ctx.identity.account,
+            method,
+            body,
+            extraHeaders,
+            maxPayment,
+            chainType,
+            security,
+          );
         }
-        const result = await x402Fetch(
-          url,
-          ctx.identity.account,
-          method,
-          body,
-          extraHeaders,
-          maxPayment,
-          chainType,
-          security,
-        );
         if (result.payment && result.payment.state !== "failed" && result.payment.state !== "reserved") {
           ctx.recordPayment?.({ amountCents: result.payment.amountCents, recipient: result.payment.recipient, domain: new URL(url).hostname });
         }
@@ -2787,6 +2804,8 @@ Model: ${ctx.inference.getDefaultModel()}
         return `x402 fetch succeeded:\n${responseStr}${result.payment ? `\nAuthorization ${result.payment.operationId}: ${result.payment.state}; ${result.payment.amountAtomic} USDC atomic units.` : ""}`;
       },
     },
+
+    ...guardianTools(),
 
     // === Orchestration Tools ===
     {

@@ -50,6 +50,9 @@ function createX402DomainAllowlistRule(policy: TreasuryPolicy): PolicyRule {
     priority: 500,
     appliesTo: { by: "name", names: ["x402_fetch"] },
     evaluate(request: PolicyRequest): PolicyRuleResult | null {
+      // The independent signer enforces the owner-approved mission's domain
+      // scope against the real quote. Keep local policy for legacy signers.
+      if (request.context.config?.walletGuardian) return null;
       const url = request.args.url as string | undefined;
       if (!url) return null;
 

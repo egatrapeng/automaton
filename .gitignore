@@ -10,4 +10,10 @@ dist
 *.tgz
 .automaton/wallet.json
 .automaton/state.db
+wallet.json
+guardian-policy.json
+agent-client.key
+guardian-client-*.key
+wallet-guardian-cursor.json
+wallet-guardian-notifications.jsonl*
 

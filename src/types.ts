@@ -41,6 +41,12 @@ export interface ProvisionResult {
 // ─── Configuration ───────────────────────────────────────────────
 
 export interface AutomatonConfig {
+  walletGuardian?: {
+    baseUrl: string;
+    tokenFile: string;
+    walletAddress: string;
+    ownerAddress: string;
+  };
   /** Host runtime billed directly by Anthropic; no Conway account required. */
   runtimeMode?: "conway" | "standalone";
   name: string;

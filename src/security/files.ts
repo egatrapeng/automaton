@@ -11,7 +11,7 @@ export function isSensitivePath(filePath: string): boolean {
   const parts = path.resolve(filePath).split(path.sep);
   const name = parts.at(-1)!.toLowerCase();
   return parts.some((part) => [".ssh", ".gnupg", ".aws", ".azure", ".kube"].includes(part.toLowerCase())) ||
-    ["wallet.json", "config.json", "automaton.json", "credentials", "id_ed25519", "id_rsa", "id_ecdsa", "id_dsa"].includes(name) ||
+    ["wallet.json", "guardian-policy.json", "config.json", "automaton.json", "credentials", "id_ed25519", "id_rsa", "id_ecdsa", "id_dsa"].includes(name) ||
     /^payment-ledger\.db(?:-(?:wal|shm|journal))?$/.test(name) ||
     name === ".env" || name.startsWith(".env.") || name.endsWith(".key") || name.endsWith(".pem") ||
     name.startsWith("private-key");

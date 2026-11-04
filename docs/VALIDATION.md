@@ -1,5 +1,33 @@
 # Validation de la mise à niveau
 
+## Complément du 4 novembre 2026 : Wallet Guardian
+
+- Construction TypeScript du runtime et de la CLI : réussie ; typecheck réussi.
+- Suite complète : **75 fichiers, 1 863 tests réussis**, aucun échec ou skip,
+  22,15 secondes. Commande :
+  `NODE_USE_ENV_PROXY=1 pnpm test --maxWorkers=2 --minWorkers=1`.
+- 65 tests dédiés au signataire : autorité du propriétaire, QQOQCCP, historique
+  des plans, budget concurrent/persistant, coût cumulatif, valorisation EUR,
+  retrait exact, panne après signature, refus des en-têtes de routage,
+  confidentialité et copie durable du journal local, absence de repli local.
+- Initialisation CLI testée dans un répertoire temporaire : portefeuille neuf
+  vide, fichiers 0600, politique EUR et source de prix explicites, aucune clé
+  affichée et refus d'écraser un portefeuille existant.
+- Assistant Python testé avec configuration et jetons factices : prompt et
+  clé Claude conservés, plafond zéro conservé, sauvegarde et jeton privés.
+- Aides des CLI et `git diff --check` : réussis.
+
+Les services de paiement, RPC et prix de ces tests sont simulés. Aucun fonds
+déplacé, aucun service installé sur le VPS, aucune requête réelle à CoinGecko et
+aucun règlement réel revendiqué. Le prix public, le proxy HTTPS, le filtrage
+réseau et l'hôte indépendant restent à vérifier lors du déploiement. Un agent
+root du même hôte peut toujours contourner une protection locale ; le mode
+indépendant exige une nouvelle clé hors de son autorité.
+
+Voir le [guide d'installation et les limites](WALLET_GUARDIAN.md).
+
+## Validation initiale
+
 3 novembre 2026, Node 22.23.4, pnpm 10.28.1. Aucun secret réel, achat ou
 provisionnement réel utilisé. Les dépendances et lockfiles n'ont pas été changés.
 
@@ -47,7 +75,8 @@ accélération équivalente de l'inférence, ni un débit garanti d'Automaton. V
 
 - Aucun déploiement du service systemd, de l'agent sur un VPS ou d'un enfant Conway.
 - Pas de paiement on-chain ni de test de règlement réel des signatures.
-- Pas de réconciliation on-chain automatique ni de signataire matériel/distant.
+- Pas de signataire matériel ; le mode distant et la réconciliation Wallet
+  Guardian sont vérifiés sur mocks, sans transaction ou connexion de production.
 - Pas de benchmark complet mémoire/CPU/disque de l'agent en production.
 - Pas d'audit exhaustif actuel des dépendances transitives ou de leur absence de
   code malveillant ; empreintes et versions ne prouvent pas l'innocuité.
@@ -57,5 +86,5 @@ accélération équivalente de l'inférence, ni un débit garanti d'Automaton. V
 
 Les choix permettant de garder l'agent opérationnel et les garanties restantes
 sont détaillés dans [le guide de migration et d'exploitation](SECURITY_UPGRADE.md).
-Les modifications sont à revoir et commiter avant de répliquer cette version à
-partir d'un clone distant ; aucun push ou commit n'a été effectué automatiquement.
+Se référer à l'historique Git pour les versions publiées. La disponibilité d'un
+commit sur le fork ne signifie pas que cette version est installée sur le VPS.

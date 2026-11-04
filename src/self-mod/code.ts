@@ -102,6 +102,7 @@ const PROTECTED_FILES: readonly string[] = Object.freeze([
  * The agent cannot write to these locations.
  */
 const BLOCKED_DIRECTORY_PATTERNS: readonly string[] = Object.freeze([
+  "wallet-guardian",
   ".ssh",
   ".gnupg",
   ".gpg",

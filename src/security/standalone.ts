@@ -35,5 +35,5 @@ export function standaloneTools(tools: AutomatonTool[]): AutomatonTool[] {
   return tools.filter(tool => !UNAVAILABLE.has(tool.name));
 }
 
-const LOCAL_HEARTBEATS = new Set(["heartbeat_ping", "check_for_updates", "soul_reflection", "health_check", "knowledge_store_prune"]);
+const LOCAL_HEARTBEATS = new Set(["heartbeat_ping", "check_for_updates", "soul_reflection", "health_check", "knowledge_store_prune", "wallet_guardian_notifications"]);
 export function standaloneHeartbeat(task: string): boolean { return LOCAL_HEARTBEATS.has(task); }

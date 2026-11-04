@@ -25,6 +25,8 @@ const PROTECTED_PATHS = [
   "injection-defense",
   "self-mod/code",
   "audit-log",
+  "wallet-guardian",
+  "guardian-policy.json",
 ] as const;
 
 function deny(
@@ -60,6 +62,8 @@ const EXTERNAL_BLOCKED_TOOLS = [
   "spawn_child",
   "fund_child",
   "update_genesis_prompt",
+  "wallet_withdraw",
+  "wallet_execute_withdrawal",
 ] as const;
 
 /**

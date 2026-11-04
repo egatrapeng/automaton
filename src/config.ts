@@ -13,6 +13,7 @@ import { loadApiKeyFromConfig } from "./identity/provision.js";
 import { createLogger } from "./observability/logger.js";
 import type { ChainType } from "./identity/chain.js";
 import { registerSecrets } from "./security/redaction.js";
+import { validateGuardianConnection } from "./wallet-guardian/client.js";
 
 const logger = createLogger("config");
 const CONFIG_FILENAME = "automaton.json";
@@ -33,6 +34,7 @@ export function loadConfig(): AutomatonConfig | null {
 
   try {
     const raw = JSON.parse(fs.readFileSync(configPath, "utf-8"));
+    if (raw.walletGuardian !== undefined) validateGuardianConnection(raw.walletGuardian);
     const apiKey = raw.conwayApiKey || loadApiKeyFromConfig();
     registerSecrets(apiKey, raw.openaiApiKey, raw.anthropicApiKey);
 

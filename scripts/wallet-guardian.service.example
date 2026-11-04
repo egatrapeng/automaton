@@ -1,0 +1,36 @@
+# Install on a separate trusted host. The agent must have no shell, sudo,
+# private keys, admin credentials or writable mounts on this host.
+# Create a dedicated guardian user and initialize its private directory first.
+[Unit]
+Description=Independent Automaton wallet guardian
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=walletguardian
+Group=walletguardian
+WorkingDirectory=/opt/automaton-guardian
+ExecStart=/usr/bin/node /opt/automaton-guardian/dist/wallet-guardian/cli.js serve --directory /var/lib/wallet-guardian
+Restart=on-failure
+RestartSec=10
+UMask=0077
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+ReadWritePaths=/var/lib/wallet-guardian
+CapabilityBoundingSet=
+MemoryMax=512M
+TasksMax=32
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

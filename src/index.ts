@@ -35,6 +35,7 @@ import { createLogger, setGlobalLogLevel, StructuredLogger } from "./observabili
 import { prettySink } from "./observability/pretty-sink.js";
 import { bootstrapTopup } from "./conway/topup.js";
 import { paymentOptionsFor } from "./security/payment-options.js";
+import { guardianFor, syncGuardianJournal } from "./wallet-guardian/client.js";
 import { resolveExecution } from "./security/execution.js";
 import { isStandalone, validateStandalone } from "./security/standalone.js";
 import { randomUUID } from "crypto";
@@ -201,6 +202,13 @@ async function run(): Promise<void> {
   // Load wallet (chain-aware)
   const { account, chainIdentity, chainType: walletChainType } = await getWallet();
   const resolvedChainType = config.chainType || walletChainType || "evm";
+  if (config.walletGuardian) {
+    if (config.walletGuardian.walletAddress.toLowerCase() === chainIdentity.address.toLowerCase()) throw new Error("Guardian funding wallet must differ from the VPS identity wallet, whose private key remains accessible to host administration");
+    logger.info(`Independent funding wallet: ${config.walletGuardian.walletAddress}. Keep the VPS identity wallet unfunded; signer must be hosted outside the agent's authority.`);
+    try { await guardianFor(config).status(); }
+    catch { logger.warn("Guardian unavailable or wallet identity mismatch. Protected payments will refuse; the agent can continue other work without local signing fallback."); }
+    try { await syncGuardianJournal(config); } catch { logger.warn("Guardian journal sync deferred; the independent signer's durable audit remains authoritative"); }
+  }
   const apiKey = isStandalone(config) ? "" : config.conwayApiKey || loadApiKeyFromConfig() || "";
   if (!apiKey && !isStandalone(config)) {
     logger.error("No API key found. Run: automaton --provision");
@@ -325,7 +333,11 @@ async function run(): Promise<void> {
 
   // Load and sync heartbeat config
   const heartbeatConfigPath = resolvePath(config.heartbeatConfigPath);
-  const heartbeatConfig = loadHeartbeatConfig(heartbeatConfigPath);
+  const loadedHeartbeatConfig = loadHeartbeatConfig(heartbeatConfigPath);
+  const heartbeatConfig = { ...loadedHeartbeatConfig, entries: [...loadedHeartbeatConfig.entries] };
+  if (config.walletGuardian && !heartbeatConfig.entries.some(entry => entry.name === "wallet_guardian_notifications")) {
+    heartbeatConfig.entries.push({ name: "wallet_guardian_notifications", task: "wallet_guardian_notifications", schedule: "* * * * *", enabled: true });
+  }
   syncHeartbeatToDb(heartbeatConfig, db);
 
   // Load skills
@@ -348,7 +360,7 @@ async function run(): Promise<void> {
 
   // Bootstrap topup: buy minimum credits ($5) from USDC so the agent can start.
   // The agent decides larger topups itself via the topup_credits tool.
-  if (!isStandalone(config)) try {
+  if (!isStandalone(config) && !config.walletGuardian) try {
     let bootstrapTimer: ReturnType<typeof setTimeout>;
     const bootstrapTimeout = new Promise<null>((_, reject) => {
       bootstrapTimer = setTimeout(() => reject(new Error("bootstrap topup timed out")), 15_000);
