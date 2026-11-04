@@ -28,11 +28,16 @@ const UNAVAILABLE = new Set([
   "transfer_credits", "spawn_child", "fund_child", "start_child", "check_child_status",
   "send_message", "message_child", "search_domains", "register_domain", "manage_dns",
   "list_models", "switch_model", "distress_signal", "enter_low_compute",
-  "create_goal", "get_plan", "complete_task",
 ]);
 
 export function standaloneTools(tools: AutomatonTool[]): AutomatonTool[] {
-  return tools.filter(tool => !UNAVAILABLE.has(tool.name));
+  const descriptions: Record<string, string> = {
+    create_goal: "Create a local work goal, then call plan_goal. Execute its tasks yourself with normal tools. No Conway planner or background workers are started; this grants no financial authority.",
+    get_plan: "Read a persisted local goal, task states, dependencies and the next actionable task. Resume execution yourself; no background worker runs these tasks.",
+    list_goals: "Read local goals and task completion counts. Orchestrator metadata is not active in standalone mode.",
+    complete_task: "After executing and verifying a local task, record its result and artifact references. Prerequisites must be complete. This is a work record, not proof of revenue or permission to spend.",
+  };
+  return tools.filter(tool => !UNAVAILABLE.has(tool.name)).map(tool => descriptions[tool.name] ? { ...tool, description: descriptions[tool.name] } : tool);
 }
 
 const LOCAL_HEARTBEATS = new Set(["heartbeat_ping", "check_for_updates", "soul_reflection", "health_check", "knowledge_store_prune", "wallet_guardian_notifications"]);

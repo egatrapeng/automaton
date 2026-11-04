@@ -104,7 +104,7 @@ export async function runAgentLoop(
   const availableTools = createBuiltinTools(identity.sandboxId).filter(tool => config.walletGuardian
     ? tool.name !== "topup_credits"
     : !tool.name.startsWith("wallet_guardian_") && !["wallet_withdraw", "wallet_execute_withdrawal"].includes(tool.name));
-  const builtinTools = isStandalone(config) ? standaloneTools(availableTools) : availableTools;
+  const builtinTools = isStandalone(config) ? standaloneTools(availableTools) : availableTools.filter(tool => tool.name !== "plan_goal");
   const installedTools = loadInstalledTools(db);
   const tools = [...builtinTools, ...installedTools];
   const toolContext: ToolContext = {
@@ -603,7 +603,7 @@ export async function runAgentLoop(
         }
       }
 
-      if (planModeController) {
+      if (planModeController || isStandalone(config)) {
         try {
           const todoMd = generateTodoMd(db.raw);
           messages = injectTodoContext(messages, todoMd);

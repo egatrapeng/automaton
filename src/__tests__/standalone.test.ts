@@ -12,6 +12,7 @@ import { PolicyEngine } from "../agent/policy-engine.js";
 import { createDefaultRules } from "../agent/policy-rules/index.js";
 import { SpendTracker } from "../agent/spend-tracker.js";
 import { DEFAULT_TREASURY_POLICY } from "../types.js";
+import { createGoal, decomposeGoal } from "../orchestration/task-graph.js";
 
 const dirs: string[] = [];
 afterEach(() => { vi.restoreAllMocks(); for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true }); });
@@ -23,6 +24,22 @@ function configuration() {
 }
 
 describe("Claude without Conway", () => {
+  it("injects persisted local tasks into the next actual inference request without starting workers", async () => {
+    const config = configuration(), db = createTestDb(), identity = { ...createTestIdentity(), sandboxId: "", apiKey: "" };
+    const goal = createGoal(db.raw, "Resume saved market experiment", "Continue the saved validation, not a new unrelated project");
+    decomposeGoal(db.raw, goal.id, [{ goalId: goal.id, parentId: null, title: "Persisted demand evidence task", description: "Gather cited evidence", status: "pending", assignedTo: null, agentRole: null, priority: 100, dependencies: [], result: null }]);
+    const fetch = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(Response.json({ id: "resume-1", model: config.inferenceModel,
+      content: [{ type: "tool_use", id: "sleep-1", name: "sleep", input: { duration_seconds: 1, reason: "test" } }], usage: { input_tokens: 20, output_tokens: 20 }, stop_reason: "tool_use" }));
+    const conway = createConwayClient({ apiUrl: config.conwayApiUrl, apiKey: "", sandboxId: "", execution: config.execution, standalone: true });
+    const inference = createInferenceClient({ apiUrl: config.conwayApiUrl, apiKey: "", defaultModel: config.inferenceModel, maxTokens: 2048, anthropicApiKey: config.anthropicApiKey });
+    try {
+      await runAgentLoop({ config, identity, db, conway, inference });
+      expect(fetch).toHaveBeenCalledTimes(1);
+      expect(fetch.mock.calls[0][0]).toBe("https://api.anthropic.com/v1/messages");
+      expect(String(fetch.mock.calls[0][1]!.body)).toContain("Persisted demand evidence task");
+      expect(db.getAgentState()).toBe("sleeping");
+    } finally { db.close(); }
+  });
   it("requires explicit host mode, Claude model and local Anthropic credential", () => {
     const config = configuration(); expect(() => validateStandalone(config)).not.toThrow();
     expect(() => validateStandalone({ ...config, anthropicApiKey: "" })).toThrow(/key/);
