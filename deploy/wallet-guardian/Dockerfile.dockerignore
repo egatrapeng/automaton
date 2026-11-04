@@ -1,0 +1,12 @@
+.git
+**/node_modules
+**/dist
+.automaton
+**/wallet.json
+**/guardian-policy.json
+**/*.key
+**/*.pem
+**/.env*
+**/*.db*
+**/*.log
+**/wallet-guardian-notifications.jsonl*
