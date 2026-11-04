@@ -4,6 +4,8 @@ import { GuardianStore, atomic, digest, identifier } from "./store.js";
 import { GuardianDenied, type GuardianConfig, type ServiceRequest, type WithdrawalRequest } from "./types.js";
 import { refreshEurValuation } from "./valuation.js";
 import { registerSecrets } from "../security/redaction.js";
+import { TradingEngine } from "../trading/engine.js";
+import { assertNoTradingReservation } from "../trading/store.js";
 
 const TRANSFER_ABI = [{ name: "transfer", type: "function", stateMutability: "nonpayable", inputs: [{ name: "to", type: "address" }, { name: "value", type: "uint256" }], outputs: [{ name: "", type: "bool" }] }] as const;
 const BALANCE_ABI = [{ name: "balanceOf", type: "function", stateMutability: "view", inputs: [{ name: "account", type: "address" }], outputs: [{ name: "", type: "uint256" }] }] as const;
@@ -19,6 +21,7 @@ function validateMerchantHeaders(headers: ServiceRequest["headers"]): void {
 }
 
 export class WalletGuardian {
+  readonly trading: TradingEngine;
   constructor(
     readonly config: GuardianConfig,
     readonly store: GuardianStore,
@@ -30,6 +33,7 @@ export class WalletGuardian {
   ) {
     if (account.address.toLowerCase() !== config.walletAddress.toLowerCase()) throw new Error("Guardian key does not match configured funding wallet");
     registerSecrets(config.ethereumRpc, config.baseRpc);
+    this.trading = new TradingEngine(config, store, account);
   }
   private blocked(id: string, error: unknown): never {
     const code = error instanceof GuardianDenied ? error.code : "POLICY_OR_SERVICE_ERROR";
@@ -69,7 +73,7 @@ export class WalletGuardian {
           // existing atomic ledger remains an additional USDC reservation boundary.
           budget: { maxHourlyCents: this.config.hourlyPaymentCents, maxDailyCents: Number.MAX_SAFE_INTEGER, minimumReserveCents: reserve, balanceAtomic },
           beforeSign: async quote => {
-            try { await refreshEurValuation(this.config); this.store.authorizeService(id, quote, request.review, this.config); }
+            try { await refreshEurValuation(this.config); assertNoTradingReservation(this.store.db); this.store.authorizeService(id, quote, request.review, this.config); }
             catch (error) { this.blocked(id, error); }
           },
         });
@@ -111,6 +115,7 @@ export class WalletGuardian {
     const id = identifier(operationId);
     const row = this.store.get(id);
     if (!row) throw new GuardianDenied("UNKNOWN_OPERATION", "Unknown withdrawal");
+    assertNoTradingReservation(this.store.db);
     if (["authorizing", "broadcast", "uncertain", "confirmed", "reverted"].includes(row.state)) return { operationId: id, state: row.state, transactionHash: row.tx_hash, replayed: true };
     let request: WithdrawalRequest;
     try { request = this.store.claimWithdrawal(id, this.config); }

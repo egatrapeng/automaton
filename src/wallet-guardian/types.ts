@@ -1,3 +1,5 @@
+import type { TradingPolicy } from "../trading/types.js";
+
 /** Public decision summaries and verifiable provenance, never private chain-of-thought. */
 export interface Qqoqccp {
   qui: string;
@@ -95,6 +97,8 @@ export interface WithdrawalRequest {
 }
 
 export interface GuardianConfig extends GuardianPolicy {
+  /** Optional independently configured automatic trading; absent means disabled. */
+  trading?: TradingPolicy;
   walletFile: string;
   tokenFile: string;
   /** Optional read-only observer token (dashboards): GET status/goals/events only. */

@@ -1,0 +1,71 @@
+{
+  "version": 1,
+  "reviewedAt": "2026-11-04",
+  "integration": "Original local skill adaptations and fixed native Uniswap V3 execution; not a wholesale installation of the upstream ecosystems. No upstream skill executes wallet actions.",
+  "upstream": [
+    {
+      "repository": "https://github.com/Uniswap/uniswap-ai",
+      "commit": "805aa5763c5ec87eeafdd28133e5f57649e3e941",
+      "consultedFiles": [
+        {
+          "path": "packages/plugins/uniswap-trading-tools/skills/dca-bot/SKILL.md",
+          "sha256": "5278af3e8be5ab45a2be77bf17df0b162e97c56850b095e3630e6a822b066183"
+        },
+        {
+          "path": "packages/plugins/uniswap-trading/skills/swap-integration/SKILL.md",
+          "sha256": "09c603095692dbee771e772f0401ec602d02d2024de7403a6ce5978a41f9a19e"
+        }
+      ],
+      "use": "Reference only; no upstream skill installer or signing CLI executed"
+    },
+    {
+      "repository": "https://github.com/BankrBot/skills",
+      "commit": "059a1e8077f2047b79e301c7c4321a7536932fc5",
+      "consultedFiles": [
+        {
+          "path": "bankr-token-scam-analysis/SKILL.md",
+          "sha256": "91ec6366decd7b5b0cd6b56ea98021c3d7152203e4fe93adb47ba09b843be475"
+        },
+        {
+          "path": "alchemy/SKILL.md",
+          "sha256": "adc855eeb2c4137de103a995ca6816f56647a376782e5418530764aa242bdff3"
+        },
+        {
+          "path": "zerion/SKILL.md",
+          "sha256": "29d3169ad68849df0a55a35bc48c153a50c60fcf122c2ad0a9a82a70b0c75587"
+        }
+      ],
+      "use": "Reference only; no upstream skill installer or signing CLI executed"
+    },
+    {
+      "repository": "https://github.com/coinbase/agentkit",
+      "commit": "f2f3e8c11a91d56a17979a229a172ba6e61a85c2",
+      "consultedFiles": [
+        {
+          "path": "typescript/agentkit/package.json",
+          "sha256": "5f94d2049f657b1a1810aad5d97a12f4edf245a1191e584c5156414243dbc382"
+        },
+        {
+          "path": "typescript/agentkit/src/action-providers/wow/uniswap/constants.ts",
+          "sha256": "13f26d18ba37d6b3d49f0d0ec44d07f9d954063842a3afcc4112256d5c94cd85"
+        }
+      ],
+      "use": "Reference only; no upstream skill installer or signing CLI executed"
+    }
+  ],
+  "localSkillSha256": {
+    "trading-agentkit-observer": "f24c24febda43e655df63ab49f1448f3cff85a9430857722aa02050a718d207d",
+    "trading-bankr-research": "007440f1463202533a709ce51d743bcbaabd5d7775b3eb1ba71fe4e34ab08d4a",
+    "trading-continuous-study": "b126534eb203ff22b7d6fafcff0fe7bd27d1942c3634b825636951db600e1f6c",
+    "trading-uniswap-v1": "4efee23ba1d24c23594cb368ad276b0767c471d815ec34a73e8c067672bfad03"
+  },
+  "agentkit": {
+    "package": "@coinbase/agentkit",
+    "version": "0.10.4",
+    "integrity": "sha512-1ZnjY6ohuBXqseZDUhrkFnlU+UjNBr9TeZjpa4wjR8pGQq2RhhVKXQSe5UOFpitgtK3z8ytsQXTHwKRohkExKw==",
+    "lockfile": "integrations/coinbase-agentkit/package-lock.json",
+    "scope": "Optional isolated read-only Pyth and DeFiLlama actions. Main branch 0.11.0 was not published at verification.",
+    "installScripts": false,
+    "dependencyAudit": "Not a full audit of the transitive dependency tree"
+  }
+}

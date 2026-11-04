@@ -64,6 +64,7 @@ const EXTERNAL_BLOCKED_TOOLS = [
   "update_genesis_prompt",
   "wallet_withdraw",
   "wallet_execute_withdrawal",
+  "trading_tick",
 ] as const;
 
 /**

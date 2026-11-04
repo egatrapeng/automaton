@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import Database from "better-sqlite3";
 import { isAddress } from "viem";
 import { redactValue } from "../security/redaction.js";
+import { assertNoTradingReservation } from "../trading/store.js";
 import { GuardianDenied, type ApprovedGoal, type CommercialCase, type GuardianPolicy, type OperationalCase, type Qqoqccp, type WithdrawalRequest } from "./types.js";
 
 export function canonical(value: unknown): string {
@@ -182,9 +183,10 @@ export class GuardianStore {
     if (atomic(review.combien?.maxAmountAtomic) < amount) throw new GuardianDenied("REVIEW_AMOUNT_CHANGED", "Actual quote exceeds reviewed amount");
     return review;
   }
-  authorizeService(id: string, quote: { url: string; network: string; recipient: string; amountAtomic: string }, review: Qqoqccp | undefined, policy: GuardianPolicy, now = Date.now()): void {
+  authorizeService(id: string, quote: { url: string; network: string; recipient: string; amountAtomic: string; validUntil?: number }, review: Qqoqccp | undefined, policy: GuardianPolicy, now = Date.now()): void {
     validatePolicy(policy);
     this.db.transaction(() => {
+      assertNoTradingReservation(this.db);
       const row = this.get(id);
       if (!row || row.state !== "proposed" || row.kind !== "service") throw new GuardianDenied("DUPLICATE", "Operation is not awaiting review");
       const amount = atomic(quote.amountAtomic);
@@ -248,8 +250,8 @@ export class GuardianStore {
       } else if (sum(today) + amount > max(policy.dailyPaymentCents)) throw new GuardianDenied("DAILY_BUDGET", "Daily USDC budget exceeded");
       const metadata = { ...JSON.parse(row.data), approvedGoalHash: entry.hash };
       // Budget windows start at authorization, not at the earlier HTTP probe.
-      this.db.prepare("UPDATE guardian_requests SET state='authorizing',goal_id=?,step_id=?,amount_atomic=?,euro_cents=?,data=?,created_at=? WHERE id=?")
-        .run(goal.id, step.id, amount.toString(), euroCents, JSON.stringify(metadata), now, id);
+      this.db.prepare("UPDATE guardian_requests SET state='authorizing',goal_id=?,step_id=?,amount_atomic=?,euro_cents=?,data=?,created_at=?,expires_at=? WHERE id=?")
+        .run(goal.id, step.id, amount.toString(), euroCents, JSON.stringify(metadata), now, quote.validUntil ?? now + 300000, id);
       this.event(id, "service_authorized", { quote: { ...quote, url: url.origin }, qqoqccp: r, parent: r.parentDecisionId ?? `owner-goal:${goal.id}`, approvedGoalHash: entry.hash,
         accounting: { currency: policy.dailyCurrency, euroCents: policy.dailyCurrency === "EUR" ? euroCents : undefined, eurQuote: policy.dailyCurrency === "EUR" ? policy.eurQuote : undefined },
         spendKind: kind,
@@ -284,6 +286,7 @@ export class GuardianStore {
   }
   claimWithdrawal(id: string, policy: GuardianPolicy, now = Date.now()): WithdrawalRequest {
     return this.db.transaction(() => {
+      assertNoTradingReservation(this.db);
       const row = this.get(id);
       if (!row || row.kind !== "withdrawal" || row.state !== "approved" || !row.expires_at || row.expires_at <= now) throw new GuardianDenied("OWNER_APPROVAL_REQUIRED", "Exact unexpired owner approval required");
       const request = JSON.parse(row.data) as WithdrawalRequest;

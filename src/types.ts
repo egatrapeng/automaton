@@ -41,6 +41,8 @@ export interface ProvisionResult {
 // ─── Configuration ───────────────────────────────────────────────
 
 export interface AutomatonConfig {
+  /** Local read-only report sync. Actual trading mode/capital/strategy live exclusively on the guardian. */
+  trading?: { enabled: boolean };
   walletGuardian?: {
     baseUrl: string;
     tokenFile: string;

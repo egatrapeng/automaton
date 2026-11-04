@@ -16,4 +16,5 @@ agent-client.key
 guardian-client-*.key
 wallet-guardian-cursor.json
 wallet-guardian-notifications.jsonl*
+trading-report.json
 

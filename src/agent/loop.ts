@@ -101,7 +101,7 @@ export async function runAgentLoop(
     options;
 
   validateStandalone(config);
-  const availableTools = createBuiltinTools(identity.sandboxId).filter(tool => config.walletGuardian
+  const availableTools = createBuiltinTools(identity.sandboxId).filter(tool => !["trading_status", "trading_tick", "trading_token_research", "agentkit_read"].includes(tool.name) || config.trading?.enabled).filter(tool => config.walletGuardian
     ? tool.name !== "topup_credits"
     : !tool.name.startsWith("wallet_guardian_") && !["wallet_withdraw", "wallet_execute_withdrawal"].includes(tool.name));
   const builtinTools = isStandalone(config) ? standaloneTools(availableTools) : availableTools.filter(tool => tool.name !== "plan_goal");

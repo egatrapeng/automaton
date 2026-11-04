@@ -40,5 +40,5 @@ export function standaloneTools(tools: AutomatonTool[]): AutomatonTool[] {
   return tools.filter(tool => !UNAVAILABLE.has(tool.name)).map(tool => descriptions[tool.name] ? { ...tool, description: descriptions[tool.name] } : tool);
 }
 
-const LOCAL_HEARTBEATS = new Set(["heartbeat_ping", "check_for_updates", "soul_reflection", "health_check", "knowledge_store_prune", "wallet_guardian_notifications"]);
+const LOCAL_HEARTBEATS = new Set(["heartbeat_ping", "check_for_updates", "soul_reflection", "health_check", "knowledge_store_prune", "wallet_guardian_notifications", "trading_report"]);
 export function standaloneHeartbeat(task: string): boolean { return LOCAL_HEARTBEATS.has(task); }

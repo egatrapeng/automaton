@@ -31,6 +31,7 @@ import { guardianTools, journalAfter, QQOQCCP_SCHEMA } from "../wallet-guardian/
 import type { Qqoqccp } from "../wallet-guardian/types.js";
 import type { X402PaymentResult } from "../conway/x402.js";
 import { standalonePlanTool } from "../orchestration/standalone-plan.js";
+import { tradingTools } from "../trading/tools.js";
 
 const logger = createLogger("tools");
 
@@ -2807,6 +2808,7 @@ Model: ${ctx.inference.getDefaultModel()}
     },
 
     ...guardianTools(),
+    ...tradingTools(),
 
     // === Orchestration Tools ===
     standalonePlanTool(),

@@ -338,6 +338,9 @@ async function run(): Promise<void> {
   if (config.walletGuardian && !heartbeatConfig.entries.some(entry => entry.name === "wallet_guardian_notifications")) {
     heartbeatConfig.entries.push({ name: "wallet_guardian_notifications", task: "wallet_guardian_notifications", schedule: "* * * * *", enabled: true });
   }
+  if (config.trading?.enabled && config.walletGuardian && !heartbeatConfig.entries.some(entry => entry.name === "trading_report")) {
+    heartbeatConfig.entries.push({ name: "trading_report", task: "trading_report", schedule: "*/5 * * * *", enabled: true });
+  }
   syncHeartbeatToDb(heartbeatConfig, db);
 
   // Load skills

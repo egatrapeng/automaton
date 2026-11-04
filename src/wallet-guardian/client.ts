@@ -56,6 +56,8 @@ export class GuardianClient {
   async intent(id: string): Promise<any> { return this.request("/v1/intents/" + encodeURIComponent(id)); }
   async goals(): Promise<any> { return this.request("/v1/goals"); }
   async events(after: number): Promise<any> { return this.request("/v1/events?after=" + after); }
+  async trading(): Promise<any> { await this.status(); return this.request("/v1/trading"); }
+  async tradingTick(): Promise<any> { await this.status(); return this.request("/v1/trading/tick", {}); }
 }
 
 export function guardianFor(config: AutomatonConfig): GuardianClient {

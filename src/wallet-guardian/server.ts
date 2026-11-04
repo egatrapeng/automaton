@@ -4,6 +4,7 @@ import { redactText, registerSecret } from "../security/redaction.js";
 import { GuardianDenied } from "./types.js";
 import { identifier } from "./store.js";
 import type { WalletGuardian } from "./service.js";
+import { renderTradingView } from "../trading/view.js";
 
 /** Bind only to loopback; an operator-managed HTTPS reverse proxy fronts this on the trusted host. */
 export function createGuardianServer(guardian: WalletGuardian, bearerToken: string, observerToken?: string): http.Server {
@@ -13,7 +14,7 @@ export function createGuardianServer(guardian: WalletGuardian, bearerToken: stri
   const expected = createHash("sha256").update("Bearer " + bearerToken).digest();
   const observer = observerToken ? createHash("sha256").update("Bearer " + observerToken).digest() : undefined;
   // Read-only observer (dashboard): it can never propose, pay, withdraw or trigger receipt lookups.
-  const OBSERVER_ROUTES = new Set(["/v1/status", "/v1/goals", "/v1/events"]);
+  const OBSERVER_ROUTES = new Set(["/v1/status", "/v1/goals", "/v1/events", "/v1/trading", "/v1/trading/view"]);
   let active = 0, windowStart = Date.now(), requests = 0;
   const server = http.createServer(async (req, res) => {
     res.setHeader("Content-Type", "application/json"); res.setHeader("Cache-Control", "no-store");
@@ -31,6 +32,12 @@ export function createGuardianServer(guardian: WalletGuardian, bearerToken: stri
     active++;
     try {
       const url = new URL(req.url ?? "/", "http://localhost");
+      if (req.method === "GET" && url.pathname === "/v1/trading") { reply(200, guardian.trading.report()); return; }
+      if (req.method === "GET" && url.pathname === "/v1/trading/view") {
+        res.setHeader("Content-Type", "text/html; charset=utf-8");
+        res.setHeader("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'");
+        res.end(renderTradingView(guardian.trading.report())); return;
+      }
       if (req.method === "GET" && url.pathname === "/v1/status") {
         reply(200, { walletAddress: guardian.config.walletAddress, ownerAddress: guardian.config.ownerAddress,
           dailyCurrency: guardian.config.dailyCurrency, dailyPaymentCents: guardian.config.dailyPaymentCents,
@@ -48,7 +55,7 @@ export function createGuardianServer(guardian: WalletGuardian, bearerToken: stri
       }
       // No endpoint for approving goals/withdrawals, changing policy, exporting
       // keys, signing arbitrary data, executing commands or supplying calldata.
-      if (req.method !== "POST" || !["/v1/pay", "/v1/withdrawals", "/v1/withdrawals/execute"].includes(url.pathname)) { reply(404, { error: "Unsupported operation" }); return; }
+      if (req.method !== "POST" || !["/v1/pay", "/v1/withdrawals", "/v1/withdrawals/execute", "/v1/trading/tick"].includes(url.pathname)) { reply(404, { error: "Unsupported operation" }); return; }
       if (!req.headers["content-type"]?.startsWith("application/json")) { reply(415, { error: "JSON required" }); return; }
       let bytes = 0; const chunks: Buffer[] = [];
       for await (const chunk of req) {
@@ -58,7 +65,8 @@ export function createGuardianServer(guardian: WalletGuardian, bearerToken: stri
       }
       const body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
       if (!body || typeof body !== "object" || Array.isArray(body)) throw new Error("Object request required");
-      if (url.pathname === "/v1/pay") reply(200, await guardian.service(body));
+      if (url.pathname === "/v1/trading/tick") reply(200, await guardian.trading.tick());
+      else if (url.pathname === "/v1/pay") reply(200, await guardian.service(body));
       else if (url.pathname === "/v1/withdrawals") reply(200, guardian.requestWithdrawal(body));
       else reply(200, await guardian.executeWithdrawal(body.operationId));
     } catch (error) {

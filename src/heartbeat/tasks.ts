@@ -25,6 +25,7 @@ import { metricsInsertSnapshot, metricsPruneOld } from "../state/database.js";
 import { ulid } from "ulid";
 import { paymentOptionsFor } from "../security/payment-options.js";
 import { syncGuardianJournal } from "../wallet-guardian/client.js";
+import { syncTradingReport } from "../trading/tools.js";
 
 const logger = createLogger("heartbeat.tasks");
 
@@ -46,6 +47,7 @@ export const COLONY_TASK_INTERVALS_MS = {
 } as const;
 
 export const BUILTIN_TASKS: Record<string, HeartbeatTaskFn> = {
+  trading_report: async (_ctx, taskCtx) => { await syncTradingReport(taskCtx.config, taskCtx.db); return { shouldWake: false }; },
   wallet_guardian_notifications: async (_ctx, taskCtx) => {
     await syncGuardianJournal(taskCtx.config);
     return { shouldWake: false };

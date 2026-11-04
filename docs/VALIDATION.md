@@ -88,3 +88,24 @@ Les choix permettant de garder l'agent opérationnel et les garanties restantes
 sont détaillés dans [le guide de migration et d'exploitation](SECURITY_UPGRADE.md).
 Se référer à l'historique Git pour les versions publiées. La disponibilité d'un
 commit sur le fork ne signifie pas que cette version est installée sur le VPS.
+
+## Trading V1 — 4 novembre 2026
+
+| Vérification | Résultat |
+| --- | --- |
+| Typage et compilation runtime/CLI | Réussis |
+| Suite complète Vitest | **78 fichiers, 1 939 tests réussis**, aucun échec ; dernier passage complet 24,48 s |
+| SDK AgentKit publié 0.10.4 | 3 tests Node réussis avec faux HTTP, plus self-test des 5 actions ; signatures/transferts refusés |
+| Image guardian | Construite avec le Node épinglé et le certificat proxy ; SDK facultatif exclu de cette image |
+| Test de l'image sans réseau | Serveur compilé, SQLite, configuration de mode, observer GET et refus POST vérifiés dans un volume jetable non financé |
+| Scripts de déploiement | Syntaxe Bash validée ; conservation Compose/configuration et exclusion des données privées testées |
+| Empreintes | Skills locaux et intégrité du paquet AgentKit conformes au manifeste de provenance |
+
+Les scénarios de trading utilisent uniquement des RPC, marchés, reçus et
+signatures simulés : swaps dans les deux sens, gas/nonce/liquidité, autorisation
+exacte, verrou commun avec services et retraits, timeout/redémarrage sans
+rediffusion, frais de reverts, refus de données périmées et dépôts exclus du PnL.
+Le diagnostic public sur Hostinger et le déploiement sur les deux VPS restent à
+effectuer avec les [commandes de déploiement](TRADING_V1.fr.md). Aucun ordre de
+production ou rendement réel n'est attesté par ces tests. Le raccordement du
+dashboard existant est décrit pour son backend extérieur à ce dépôt.

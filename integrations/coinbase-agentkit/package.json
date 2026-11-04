@@ -1,0 +1,9 @@
+{
+  "name": "automaton-agentkit-observer",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Optional isolated AgentKit data actions; no wallet signing or transfer actions",
+  "dependencies": { "@coinbase/agentkit": "0.10.4" },
+  "scripts": { "test": "node --max-old-space-size=256 --test observer.test.mjs && node --max-old-space-size=256 observer.mjs --self-test" }
+}
