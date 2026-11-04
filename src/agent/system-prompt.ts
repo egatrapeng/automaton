@@ -552,6 +552,9 @@ export function getOrchestratorStatus(db: Database.Database): string {
 /**
  * Build the complete system prompt for a turn.
  */
+/** Upper bound for the creator's genesis prompt injected in every turn (characters). */
+export const GENESIS_PROMPT_MAX_CHARS = 16000;
+
 export function buildSystemPrompt(params: {
   identity: AutomatonIdentity;
   config: AutomatonConfig;
@@ -659,7 +662,13 @@ Your chain type is ${chainType}.`,
   // Sanitized as agent-evolved content with trust boundary markers
   if (config.genesisPrompt) {
     const sanitized = sanitizeInput(config.genesisPrompt, "genesis", "skill_instruction");
-    const truncated = sanitized.content.slice(0, 2000);
+    // The creator's prompt carries constraints (budgets, secrets, authorizations): silently keeping
+    // only its first 2000 characters dropped most of them. Keep a bounded but realistic size and say
+    // so explicitly when it is cut.
+    const truncated = sanitized.content.length > GENESIS_PROMPT_MAX_CHARS
+      ? sanitized.content.slice(0, GENESIS_PROMPT_MAX_CHARS) + `\n[TRUNCATED: genesis prompt exceeds ${GENESIS_PROMPT_MAX_CHARS} characters; ask the creator to shorten it]`
+      : sanitized.content;
+    if (truncated !== sanitized.content) logger.warn(`Genesis prompt truncated to ${GENESIS_PROMPT_MAX_CHARS} characters`);
     sections.push(
       `## Genesis Purpose [AGENT-EVOLVED CONTENT]\n${truncated}\n## End Genesis`,
     );

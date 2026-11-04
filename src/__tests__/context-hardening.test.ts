@@ -17,7 +17,7 @@ import {
 } from "../agent/context.js";
 import { DEFAULT_TOKEN_BUDGET } from "../types.js";
 import type { AgentTurn, TokenBudget } from "../types.js";
-import { buildSystemPrompt } from "../agent/system-prompt.js";
+import { buildSystemPrompt, GENESIS_PROMPT_MAX_CHARS } from "../agent/system-prompt.js";
 import {
   MockInferenceClient,
   createTestDb,
@@ -308,9 +308,20 @@ describe("buildSystemPrompt genesis prompt sanitization", () => {
     expect(prompt).toContain("## End Genesis");
   });
 
-  it("truncates genesis prompt to 2000 chars in system prompt", () => {
+  it("keeps a long creator prompt intact up to the bound (constraints beyond 2000 chars are not dropped)", () => {
     const identity = createTestIdentity();
-    const longGenesis = "x".repeat(5000);
+    const genesis = "Mission.\n" + "contrainte ".repeat(800) + "\nDERNIERE CONTRAINTE : ne jamais relever les budgets.";
+    const config = createTestConfig({ genesisPrompt: genesis });
+    const prompt = buildSystemPrompt({ identity, config, financial: { creditsCents: 0, usdcBalance: 0, lastChecked: new Date().toISOString() },
+      state: "running", db, tools: [], isFirstRun: false });
+    expect(genesis.length).toBeGreaterThan(8000);
+    expect(prompt).toContain("DERNIERE CONTRAINTE : ne jamais relever les budgets.");
+    expect(prompt).not.toContain("[TRUNCATED");
+  });
+
+  it("truncates an oversized genesis prompt at the bound and says so", () => {
+    const identity = createTestIdentity();
+    const longGenesis = "x".repeat(GENESIS_PROMPT_MAX_CHARS + 3000);
     const config = createTestConfig({ genesisPrompt: longGenesis });
 
     const prompt = buildSystemPrompt({
@@ -330,9 +341,9 @@ describe("buildSystemPrompt genesis prompt sanitization", () => {
     expect(genesisEnd).toBeGreaterThan(genesisStart);
 
     const genesisSection = prompt.slice(genesisStart, genesisEnd);
-    // The content between markers should be <= 2000 chars + marker text
     const contentOnly = genesisSection.replace("## Genesis Purpose [AGENT-EVOLVED CONTENT]\n", "");
-    expect(contentOnly.length).toBeLessThanOrEqual(2000 + 10); // small margin for whitespace
+    expect(contentOnly).toContain("[TRUNCATED");
+    expect(contentOnly.length).toBeLessThanOrEqual(GENESIS_PROMPT_MAX_CHARS + 200);
   });
 });
 
