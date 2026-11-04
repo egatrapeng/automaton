@@ -97,6 +97,8 @@ export interface WithdrawalRequest {
 export interface GuardianConfig extends GuardianPolicy {
   walletFile: string;
   tokenFile: string;
+  /** Optional read-only observer token (dashboards): GET status/goals/events only. */
+  observerTokenFile?: string;
   databaseFile: string;
   port: number;
   ethereumRpc: string;

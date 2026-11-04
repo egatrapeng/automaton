@@ -24,7 +24,7 @@ async function main(): Promise<void> {
   } });
   const command = positionals[0];
   if (!command || command === "help") {
-    console.log("Trusted signer host only. Commands: init --directory ABS --owner ADDRESS; status; serve; approve-goal --file PLAN.json; revoke-goal --id ID; inspect --id ID; approve-withdrawal --id ID --hash EXACT_HASH --recipient OWNER; events [--after SEQUENCE]. All commands require --directory ABS. Never install the funded guardian under an agent-controlled account/host."); return;
+    console.log("Trusted signer host only. Commands: init --directory ABS --owner ADDRESS; init-observer; status; serve; approve-goal --file PLAN.json; revoke-goal --id ID; inspect --id ID; approve-withdrawal --id ID --hash EXACT_HASH --recipient OWNER; events [--after SEQUENCE]. All commands require --directory ABS. Never install the funded guardian under an agent-controlled account/host."); return;
   }
   if (!values.directory || !path.isAbsolute(values.directory)) throw new Error("Explicit absolute guardian directory required");
   const directory = values.directory;
@@ -52,6 +52,16 @@ async function main(): Promise<void> {
   const config = JSON.parse(readPrivate(filename)) as GuardianConfig;
   validatePolicy(config);
   const store = new GuardianStore(config.databaseFile);
+  if (command === "init-observer") {
+    if (config.observerTokenFile) throw new Error("Observer token already configured; rotate it by replacing its private file");
+    const observerFile = path.join(directory, "observer-client.key");
+    fs.writeFileSync(observerFile, randomBytes(32).toString("hex"), { flag: "wx", mode: 0o600 });
+    const updated = { ...config, observerTokenFile: observerFile };
+    fs.writeFileSync(filename + ".new", JSON.stringify(updated, null, 2), { flag: "wx", mode: 0o600 });
+    fs.renameSync(filename + ".new", filename);
+    console.log("Read-only observer token created (GET status/goals/events only). Restart the guardian. The token is never printed.");
+    store.close(); return;
+  }
   if (command === "approve-goal") {
     if (!values.file) throw new Error("Review a plan JSON and pass --file");
     store.approveGoal(JSON.parse(fs.readFileSync(values.file, "utf8")) as ApprovedGoal);
@@ -77,7 +87,9 @@ async function main(): Promise<void> {
     const wallet = JSON.parse(readPrivate(config.walletFile)); registerSecrets(wallet.privateKey);
     const account = privateKeyToAccount(wallet.privateKey);
     const token = readPrivate(config.tokenFile).trim(); registerSecrets(token);
-    const server = createGuardianServer(new WalletGuardian(config, store, account), token);
+    const observerToken = config.observerTokenFile ? readPrivate(config.observerTokenFile).trim() : undefined;
+    if (observerToken) registerSecrets(observerToken);
+    const server = createGuardianServer(new WalletGuardian(config, store, account), token, observerToken);
     server.listen(config.port, "127.0.0.1", () => console.log("Guardian listening on loopback; use a trusted HTTPS reverse proxy. No public key export or generic signing API."));
     const stop = () => { server.close(() => { store.close(); process.exit(0); }); };
     process.on("SIGTERM", stop); process.on("SIGINT", stop);

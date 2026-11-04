@@ -6,16 +6,26 @@ import { identifier } from "./store.js";
 import type { WalletGuardian } from "./service.js";
 
 /** Bind only to loopback; an operator-managed HTTPS reverse proxy fronts this on the trusted host. */
-export function createGuardianServer(guardian: WalletGuardian, bearerToken: string): http.Server {
+export function createGuardianServer(guardian: WalletGuardian, bearerToken: string, observerToken?: string): http.Server {
   if (bearerToken.length < 32) throw new Error("Strong guardian bearer token required");
-  registerSecret(bearerToken);
+  if (observerToken !== undefined && (observerToken.length < 32 || observerToken === bearerToken)) throw new Error("Observer token must be strong and distinct from the agent token");
+  registerSecret(bearerToken); if (observerToken) registerSecret(observerToken);
   const expected = createHash("sha256").update("Bearer " + bearerToken).digest();
+  const observer = observerToken ? createHash("sha256").update("Bearer " + observerToken).digest() : undefined;
+  // Read-only observer (dashboard): it can never propose, pay, withdraw or trigger receipt lookups.
+  const OBSERVER_ROUTES = new Set(["/v1/status", "/v1/goals", "/v1/events"]);
   let active = 0, windowStart = Date.now(), requests = 0;
   const server = http.createServer(async (req, res) => {
     res.setHeader("Content-Type", "application/json"); res.setHeader("Cache-Control", "no-store");
     const reply = (code: number, value: unknown) => { res.statusCode = code; res.end(JSON.stringify(value)); };
     const supplied = createHash("sha256").update(req.headers.authorization ?? "").digest();
-    if (!timingSafeEqual(expected, supplied)) { reply(401, { error: "Unauthorized" }); return; }
+    const isAgent = timingSafeEqual(expected, supplied);
+    const isObserver = !isAgent && observer !== undefined && timingSafeEqual(observer, supplied);
+    if (!isAgent && !isObserver) { reply(401, { error: "Unauthorized" }); return; }
+    if (isObserver) {
+      const route = new URL(req.url ?? "/", "http://localhost").pathname;
+      if (req.method !== "GET" || !OBSERVER_ROUTES.has(route)) { reply(403, { error: "Observer token is read-only", code: "OBSERVER_READ_ONLY" }); return; }
+    }
     if (Date.now() - windowStart >= 60_000) { windowStart = Date.now(); requests = 0; }
     if (++requests > 120 || active > 0) { reply(429, { error: "Guardian busy; inspect operation status before retrying" }); return; }
     active++;
@@ -24,7 +34,8 @@ export function createGuardianServer(guardian: WalletGuardian, bearerToken: stri
       if (req.method === "GET" && url.pathname === "/v1/status") {
         reply(200, { walletAddress: guardian.config.walletAddress, ownerAddress: guardian.config.ownerAddress,
           dailyCurrency: guardian.config.dailyCurrency, dailyPaymentCents: guardian.config.dailyPaymentCents,
-          maxSinglePaymentCents: guardian.config.maxSinglePaymentCents, serviceNetwork: "eip155:8453",
+          maxSinglePaymentCents: guardian.config.maxSinglePaymentCents, hourlyPaymentCents: guardian.config.hourlyPaymentCents,
+          hourlyCurrency: "USDC", serviceNetwork: "eip155:8453",
           message: "Policy wallet; profitability is not guaranteed; no generic signing endpoint" }); return;
       }
       if (req.method === "GET" && url.pathname === "/v1/goals") { reply(200, guardian.store.goals()); return; }

@@ -372,6 +372,26 @@ describe("guardian API and runtime integration", () => {
     expect(a.signTransaction).not.toHaveBeenCalled(); expect(a.signTypedData).not.toHaveBeenCalled();
   });
 
+  it("gives a read-only observer token status, goals and events only", async () => {
+    const a = wallet(), s = store(), observer = "observer-token-for-dashboard-0123456789", guardian = new WalletGuardian(config(), s, a);
+    s.approveGoal(goal());
+    const server = createGuardianServer(guardian, token, observer); servers.push(server);
+    expect((await request(server, "/v1/status", undefined, observer)).body).toMatchObject({ walletAddress: payer, hourlyPaymentCents: 300, hourlyCurrency: "USDC" });
+    expect((await request(server, "/v1/goals", undefined, observer)).status).toBe(200);
+    expect((await request(server, "/v1/events", undefined, observer)).status).toBe(200);
+    for (const [route, body] of [["/v1/pay", serviceRequest("observer-pay")], ["/v1/withdrawals", withdrawal("observer-withdrawal")], ["/v1/withdrawals/execute", { operationId: "x" }]] as const) {
+      const res = await request(server, route, body, observer);
+      expect(res.status).toBe(403); expect(res.body.code).toBe("OBSERVER_READ_ONLY");
+    }
+    expect((await request(server, "/v1/intents/anything", undefined, observer)).status).toBe(403);
+    expect((await request(server, "/v1/status", undefined, "wrong-token-wrong-token-wrong-token")).status).toBe(401);
+    expect(s.get("observer-pay")).toBeUndefined(); expect(s.get("observer-withdrawal")).toBeUndefined();
+    expect(a.signTransaction).not.toHaveBeenCalled(); expect(a.signTypedData).not.toHaveBeenCalled();
+    expect((await request(server, "/v1/status")).status).toBe(200);
+    expect(() => createGuardianServer(guardian, token, token)).toThrow("distinct");
+    expect(() => createGuardianServer(guardian, token, "short")).toThrow("strong");
+  });
+
   function localConfig(): AutomatonConfig {
     const dir = directory(), tokenFile = path.join(dir, "client.key"); fs.writeFileSync(tokenFile, token, { mode: 0o600 });
     return { ...DEFAULT_CONFIG, dbPath: path.join(dir, "state.db"), walletGuardian: { baseUrl: "https://guardian.example", tokenFile, walletAddress: payer, ownerAddress: owner } } as AutomatonConfig;
