@@ -30,6 +30,7 @@ import { guardianFor } from "../wallet-guardian/client.js";
 import { guardianTools, journalAfter, QQOQCCP_SCHEMA } from "../wallet-guardian/tools.js";
 import type { Qqoqccp } from "../wallet-guardian/types.js";
 import type { X402PaymentResult } from "../conway/x402.js";
+import { standalonePlanTool } from "../orchestration/standalone-plan.js";
 
 const logger = createLogger("tools");
 
@@ -2808,6 +2809,7 @@ Model: ${ctx.inference.getDefaultModel()}
     ...guardianTools(),
 
     // === Orchestration Tools ===
+    standalonePlanTool(),
     {
       name: "create_goal",
       description:
@@ -2846,6 +2848,7 @@ Model: ${ctx.inference.getDefaultModel()}
           typeof args.strategy === "string" ? args.strategy.trim() : undefined;
 
         if (!title) return "Error: goal title cannot be empty.";
+        if (ctx.config.runtimeMode === "standalone" && (title.length > 160 || description.length > 4000)) return "Error: local goal title/description exceeds the planning context limit.";
         if (!description) return "Error: goal description cannot be empty.";
 
         // Dedup: reject if a similar active goal already exists
@@ -2858,6 +2861,7 @@ Model: ${ctx.inference.getDefaultModel()}
             titleLower.includes(g.title.toLowerCase()),
         );
         if (duplicate) {
+          if (ctx.config.runtimeMode === "standalone") return `Existing local goal "${duplicate.title}" (${duplicate.id}). Read get_plan, plan it if necessary and execute its next task yourself; no background workers are running.`;
           return (
             `Duplicate goal rejected. An active goal already exists with a similar title:\n` +
             `"${duplicate.title}" (id: ${duplicate.id}, status: ${duplicate.status})\n` +
@@ -2869,6 +2873,7 @@ Model: ${ctx.inference.getDefaultModel()}
         // Only 1 goal at a time — the orchestrator processes goals sequentially.
         if (activeGoals.length >= 1) {
           const current = activeGoals[0];
+          if (ctx.config.runtimeMode === "standalone") return `Continue local goal "${current.title}" (${current.id}). Read get_plan; if no tasks exist, call plan_goal. Execute tasks yourself, then complete_task. No background workers are running.`;
           return (
             `BLOCKED: A goal is already being processed by the orchestrator and worker agents:\n` +
             `"${current.title}" (id: ${current.id})\n\n` +
@@ -2881,6 +2886,7 @@ Model: ${ctx.inference.getDefaultModel()}
 
         const goal = createGoal(ctx.db.raw, title, description, strategy);
         setGoalInputSource(ctx.db.raw, goal.id, ctx.inputSource);
+        if (ctx.config.runtimeMode === "standalone") return `Local goal created: "${goal.title}" (${goal.id}). Call plan_goal, execute its tasks yourself with normal tools, verify artifacts and call complete_task. No Conway, planner inference or worker was started. This does not approve wallet spending.`;
         return (
           `Goal created: "${goal.title}" (id: ${goal.id}, status: ${goal.status})\n` +
           `The orchestrator will pick this up on the next tick and begin planning.\n` +
@@ -3009,7 +3015,7 @@ Model: ${ctx.inference.getDefaultModel()}
         required: ["goal_id"],
       },
       execute: async (args, ctx) => {
-        const { getGoalById, getActiveGoals } =
+        const { getGoalById, getActiveGoals, getTasksByGoal } =
           await import("../state/database.js");
 
         const input = (args.goal_id as string).trim();
@@ -3026,6 +3032,14 @@ Model: ${ctx.inference.getDefaultModel()}
           } else {
             return `No goal found matching "${input}". Use list_goals to see active goals.`;
           }
+        }
+
+        if (ctx.config.runtimeMode === "standalone") {
+          const tasks = getTasksByGoal(ctx.db.raw, resolvedId);
+          const next = tasks.find(t => t.status === "pending" && t.dependencies.every(id => tasks.find(p => p.id === id)?.status === "completed"));
+          return JSON.stringify({ goal: getGoalById(ctx.db.raw, resolvedId),
+            tasks: tasks.map(t => ({ id: t.id, title: t.title, status: t.status, dependencies: t.dependencies })),
+            nextTask: next ?? null, instruction: tasks.length ? "Execute the ready task yourself; no remote workers exist. Verify results before complete_task." : "Call plan_goal to persist a concrete plan." });
         }
 
         const planRow = ctx.db.raw
@@ -3090,6 +3104,7 @@ Model: ${ctx.inference.getDefaultModel()}
 
         const input = (args.task_id as string).trim();
         const output = (args.output as string).trim();
+        if (ctx.config.runtimeMode === "standalone" && !output) return "Verify the task result and provide a non-empty completion summary.";
         const artifacts =
           typeof args.artifacts === "string"
             ? (args.artifacts as string)
@@ -3106,12 +3121,13 @@ Model: ${ctx.inference.getDefaultModel()}
               `SELECT * FROM task_graph WHERE LOWER(title) LIKE ? AND status != 'completed' LIMIT 1`,
             )
             .get(`%${input.toLowerCase()}%`) as any;
-          if (rows) task = rows;
+          if (rows) task = getTaskById(ctx.db.raw, rows.id);
         }
         if (!task)
           return `Task "${input}" not found. Use list_goals to see tasks with their IDs.`;
         if (task.status === "completed")
           return `Task "${task.title}" is already completed.`;
+        if (ctx.config.runtimeMode === "standalone" && task.dependencies.some(id => getTaskById(ctx.db.raw, id)?.status !== "completed")) return "Complete and verify prerequisite tasks first.";
 
         const result = {
           success: true,

@@ -175,6 +175,7 @@ export interface AutomatonTool {
 }
 
 export type ToolCategory =
+  | "orchestration"
   | "vm"
   | "conway"
   | "self_mod"

@@ -39,9 +39,12 @@ GPT/Conway on low credits. Configuration/credential/model errors are reported;
 the program does not manufacture credentials or bypass account restrictions.
 
 Local shell/files, git, skills, persistent memory, inference budget tracking,
-sleep/wakeup and local maintenance heartbeats remain available. This first
-standalone profile runs a single local agent; the Conway colony/orchestration
-bootstrap and goal-delegation tools are not used. Remote provisioning, credit
+sleep/wakeup and local maintenance heartbeats remain available. The profile
+runs a single local agent: create_goal, plan_goal, get_plan and complete_task
+persist a local task graph, and current tasks are injected into each turn.
+The agent executes these tasks itself; no additional planner inference or
+background worker is started. Financial guardian approvals remain separate.
+The Conway colony/orchestration bootstrap is not used. Remote provisioning, credit
 transfers, Conway messaging/domains and Conway model discovery require a real
 Conway account and are not offered in this profile. Operator-enabled on-chain
 tools and external web requests retain their own existing policies.
@@ -53,7 +56,8 @@ tasks that need Conway are not scheduled. The API key remains a local secret,
 subject to the same host-administrator trust limitations described in
 `SECURITY_UPGRADE.md`; this mode does not add OS isolation.
 
-Validation: 1,798 tests passed across 74 files, including five standalone tests.
+Latest validation: 1,879 tests passed across 76 files. See the
+[fork comparison and migration notes](CONWAY_FORK_COMPARISON.fr.md).
 The end-to-end test uses simulated Anthropic responses, executes a real harmless
 host command, verifies native tool-result blocks, and asserts every HTTP request
 targets Anthropic. Another verifies a zero daily budget prevents any inference
