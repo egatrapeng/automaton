@@ -212,6 +212,41 @@ describe("independent wallet security policy", () => {
     begin(s, "eur-1"); expect(() => s.authorizeService("eur-1", quote, review(), c)).toThrow("Daily EUR");
   });
 
+  it("accepts an operational expense without fictitious revenue only where the owner allowed it", () => {
+    const s = store(), c = config(), op = review({ economics: { kind: "operational", necessity: "The approved step needs current data",
+      expectedBenefit: "Saves manual research time for the mission", alternatives: "Free public sources checked: outdated", estimatedPlanCostAtomic: "2000000" } });
+    s.approveGoal(goal()); begin(s, "op-default", op);
+    expect(() => s.authorizeService("op-default", quote, op, c)).toThrow("did not approve operational");
+    const g = goal(); g.steps[0].spendKinds = ["operational"]; s.approveGoal(g);
+    begin(s, "op-ok", op); s.authorizeService("op-ok", quote, op, c); expect(s.get("op-ok")?.state).toBe("authorizing");
+    expect(s.events()).toEqual(expect.arrayContaining([expect.objectContaining({ type: "service_authorized", data: expect.stringContaining('"spendKind":"operational"') })]));
+    const commercial = review(); begin(s, "commercial-not-allowed", commercial);
+    expect(() => s.authorizeService("commercial-not-allowed", quote, commercial, c)).toThrow("did not approve commercial");
+  });
+
+  it("still requires necessity, benefit, alternatives, evidence and cumulative cost for operational spending", () => {
+    const s = store(), c = config(), g = goal(); g.steps[0].spendKinds = ["commercial", "operational"]; s.approveGoal(g);
+    const base = { kind: "operational" as const, necessity: "Needed by the step", expectedBenefit: "Faster delivery", alternatives: "Manual work, 2 hours", estimatedPlanCostAtomic: "2000000" };
+    const cases: Array<[string, Record<string, unknown>, string]> = [["op-no-need", { ...base, necessity: "" }, "necessity"], ["op-no-alt", { ...base, alternatives: undefined }, "alternatives"],
+      ["op-low-cost", { ...base, estimatedPlanCostAtomic: "999999" }, "include this payment"], ["op-invented", { ...base, evidenceIds: ["model-claim"] }, "owner-reviewed"],
+      ["op-bad-kind", { ...base, kind: "marketing" }, "commercial or operational"]];
+    for (const [id, economics, message] of cases) {
+      const r = review({ economics: economics as any }); begin(s, id, r); expect(() => s.authorizeService(id, quote, r, c)).toThrow(message);
+    }
+    const first = review({ economics: base }); begin(s, "op-1", first); s.authorizeService("op-1", quote, first, c);
+    const second = review({ economics: { ...base, estimatedPlanCostAtomic: "1000000" } }); begin(s, "op-2", second);
+    expect(() => s.authorizeService("op-2", quote, second, c)).toThrow("omits earlier");
+    const noRevenue = review({ economics: { ...review().economics!, expectedRevenueAtomic: "1" } as any }); begin(s, "commercial-loss", noRevenue);
+    expect(() => s.authorizeService("commercial-loss", quote, noRevenue, c)).toThrow("must exceed");
+  });
+
+  it("rejects malformed spending kinds in owner-approved plans", () => {
+    const s = store();
+    for (const kinds of [[], ["marketing"], ["operational", "operational"]]) {
+      const g = goal(); g.steps[0].spendKinds = kinds as any; expect(() => s.approveGoal(g)).toThrow("spendKinds");
+    }
+  });
+
   it("does not omit earlier spending from the profitability calculation", () => {
     const s = store(), c = config(); s.approveGoal(goal()); begin(s, "cost-1"); s.authorizeService("cost-1", quote, review(), c);
     const r = review(); r.economics!.estimatedPlanCostAtomic = "1000000"; begin(s, "cost-2", r);
@@ -369,6 +404,19 @@ describe("guardian API and runtime integration", () => {
     expect(http.mock.calls.every(([url]) => String(url).startsWith("https://guardian.example/"))).toBe(true);
     expect(a.signTypedData).not.toHaveBeenCalled(); expect(ctx.recordPayment).toHaveBeenCalledTimes(1);
     expect(JSON.parse(String(http.mock.calls[1][1]?.body))).toMatchObject({ operationId: "purchase-1", review: { goalId: "mission-1" } });
+  });
+
+  it("reports an unavailable guardian clearly when the proxy answers without JSON", async () => {
+    const c = localConfig(); vi.spyOn(ResilientHttpClient.prototype, "request")
+      .mockResolvedValueOnce(new Response("", { status: 502 }))
+      .mockResolvedValueOnce(new Response("<html>Bad gateway</html>", { status: 504, headers: { "Content-Type": "text/html" } }))
+      .mockResolvedValueOnce(new Response("not json", { status: 200 }))
+      .mockResolvedValueOnce(Response.json({ code: "DAILY_BUDGET", error: "Daily EUR-valued budget exceeded" }, { status: 403 }));
+    const g = new GuardianClient(c.walletGuardian!);
+    await expect(g.status()).rejects.toThrow("Guardian 502: UNAVAILABLE");
+    await expect(g.goals()).rejects.toThrow("Guardian 504: UNAVAILABLE");
+    await expect(g.goals()).rejects.toThrow("non-JSON response refused");
+    await expect(g.goals()).rejects.toThrow("Guardian 403: DAILY_BUDGET");
   });
 
   it("has no local signing fallback when the remote guardian is unavailable", async () => {

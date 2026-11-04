@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import Database from "better-sqlite3";
 import { isAddress } from "viem";
 import { redactValue } from "../security/redaction.js";
-import { GuardianDenied, type ApprovedGoal, type GuardianPolicy, type Qqoqccp, type WithdrawalRequest } from "./types.js";
+import { GuardianDenied, type ApprovedGoal, type CommercialCase, type GuardianPolicy, type OperationalCase, type Qqoqccp, type WithdrawalRequest } from "./types.js";
 
 export function canonical(value: unknown): string {
   if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "null";
@@ -160,6 +160,8 @@ export class GuardianStore {
       if (ids.has(step.id)) throw new Error("Duplicate step ID"); ids.add(step.id);
       if (step.allowedHosts !== "public" && (!Array.isArray(step.allowedHosts) || !step.allowedHosts.length || step.allowedHosts.some(h => typeof h !== "string" || !/^[a-z0-9.-]+$/i.test(h)))) throw new Error("Explicit public-domain scope required");
       if (step.allowedRecipients !== undefined && (!Array.isArray(step.allowedRecipients) || step.allowedRecipients.some(a => !isAddress(a, { strict: false }) || /^0x0{40}$/i.test(a)))) throw new Error("Invalid approved merchant addresses");
+      if (step.spendKinds !== undefined && (!Array.isArray(step.spendKinds) || !step.spendKinds.length || new Set(step.spendKinds).size !== step.spendKinds.length ||
+        step.spendKinds.some(k => k !== "commercial" && k !== "operational"))) throw new Error("Step spendKinds must list commercial and/or operational");
       if (!Array.isArray(step.evidence) || !step.evidence.length || step.evidence.length > 32) throw new Error("Plan must record its evidence/assumptions");
       for (const evidence of step.evidence) { identifier(evidence.id); text(evidence.summary, "evidence summary"); }
     }
@@ -203,11 +205,27 @@ export class GuardianStore {
         if (!parent || parent.id === id || parent.goal_id !== goal.id || !["accepted", "broadcast"].includes(parent.state)) throw new GuardianDenied("INVALID_PROVENANCE", "Parent must be a completed decision in the same authorized mission");
       }
       const economics = r.economics;
-      if (!economics) throw new GuardianDenied("ECONOMIC_CASE_MISSING", "Record benefit, cost, evidence, alternatives and uncertainty");
-      const cost = atomic(economics.estimatedPlanCostAtomic), revenue = atomic(economics.expectedRevenueAtomic);
-      if (cost < amount || revenue <= cost) throw new GuardianDenied("PLAN_NOT_JUSTIFIED", "Expected plan benefit must exceed stated plan cost, including this payment");
-      text(economics.uncertainties, "economic uncertainty"); text(economics.freeAlternative, "free alternative");
-      if (!Array.isArray(economics.evidenceIds) || !economics.evidenceIds.length || economics.evidenceIds.some(e => !step.evidence.some(x => x.id === e))) throw new GuardianDenied("UNAPPROVED_EVIDENCE", "Economic assumptions must cite owner-reviewed evidence; a profit claim is not proof");
+      if (!economics || typeof economics !== "object") throw new GuardianDenied("ECONOMIC_CASE_MISSING", "Record the spending case: commercial (revenue, cost, evidence, uncertainty) or operational (necessity, benefit, alternatives, cost)");
+      const kind = economics.kind ?? "commercial";
+      if (kind !== "commercial" && kind !== "operational") throw new GuardianDenied("SPEND_KIND_INVALID", "Spending kind must be commercial or operational");
+      if (!(step.spendKinds ?? ["commercial"]).includes(kind)) throw new GuardianDenied("SPEND_KIND_NOT_APPROVED", `The owner did not approve ${kind} spending for this plan step`);
+      const cost = atomic(economics.estimatedPlanCostAtomic);
+      if (cost < amount) throw new GuardianDenied("PLAN_NOT_JUSTIFIED", "Stated plan cost must include this payment");
+      const cite = (ids: unknown, required: boolean) => {
+        if (ids === undefined && !required) return;
+        if (!Array.isArray(ids) || !ids.length || ids.some(e => !step.evidence.some(x => x.id === e))) throw new GuardianDenied("UNAPPROVED_EVIDENCE", "Assumptions must cite owner-reviewed evidence of this step; a profit or necessity claim is not proof");
+      };
+      if (kind === "commercial") {
+        const c = economics as CommercialCase;
+        if (atomic(c.expectedRevenueAtomic) <= cost) throw new GuardianDenied("PLAN_NOT_JUSTIFIED", "Expected plan benefit must exceed stated plan cost, including this payment");
+        text(c.uncertainties, "economic uncertainty"); text(c.freeAlternative, "free alternative"); cite(c.evidenceIds, true);
+      } else {
+        // Operational spend never needs a (possibly fictitious) revenue figure.
+        const o = economics as OperationalCase;
+        text(o.necessity, "operational necessity"); text(o.expectedBenefit, "expected benefit"); text(o.alternatives, "alternatives considered");
+        if (o.uncertainties !== undefined) text(o.uncertainties, "uncertainty");
+        cite(o.evidenceIds, false);
+      }
       const prior = this.db.prepare("SELECT * FROM guardian_requests WHERE kind='service' AND state IN ('authorizing','accepted','uncertain')").all() as Row[];
       const sum = (rows: Row[]) => rows.reduce((n, p) => n + BigInt(p.amount_atomic ?? "0"), 0n);
       const max = (c: number) => BigInt(cents(c)) * 10_000n;
@@ -234,7 +252,9 @@ export class GuardianStore {
         .run(goal.id, step.id, amount.toString(), euroCents, JSON.stringify(metadata), now, id);
       this.event(id, "service_authorized", { quote: { ...quote, url: url.origin }, qqoqccp: r, parent: r.parentDecisionId ?? `owner-goal:${goal.id}`, approvedGoalHash: entry.hash,
         accounting: { currency: policy.dailyCurrency, euroCents: policy.dailyCurrency === "EUR" ? euroCents : undefined, eurQuote: policy.dailyCurrency === "EUR" ? policy.eurQuote : undefined },
-        economicVerdict: "Positive under declared assumptions only; profitability is not guaranteed", notification: "Recorded before signing" });
+        spendKind: kind,
+        economicVerdict: kind === "commercial" ? "Positive under declared assumptions only; profitability is not guaranteed" : "Operational necessity declared for an owner-approved step; benefit is an assumption, not a guarantee",
+        notification: "Recorded before signing" });
     }).immediate();
   }
   requestWithdrawal(request: WithdrawalRequest, policy: GuardianPolicy, now = Date.now()): void {

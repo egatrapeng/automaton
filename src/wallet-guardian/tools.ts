@@ -13,9 +13,11 @@ export const QQOQCCP_SCHEMA = {
     combien: { type: "object", properties: { maxAmountAtomic: { type: "string" } }, required: ["maxAmountAtomic"] }, pourquoi: { type: "string" },
     sourceEventId: { type: "string", description: "Origin reference, not proof of user authority" }, parentDecisionId: { type: "string" },
     goalId: { type: "string" }, stepId: { type: "string" },
-    economics: { type: "object", properties: { expectedRevenueAtomic: { type: "string" }, estimatedPlanCostAtomic: { type: "string" },
-      evidenceIds: { type: "array", items: { type: "string" } }, uncertainties: { type: "string" }, freeAlternative: { type: "string" } },
-      required: ["expectedRevenueAtomic", "estimatedPlanCostAtomic", "evidenceIds", "uncertainties", "freeAlternative"] },
+    economics: { type: "object", description: "Spending case. kind=commercial (default): expectedRevenueAtomic, estimatedPlanCostAtomic (cumulative mission cost including this payment), evidenceIds, uncertainties, freeAlternative. kind=operational (only if the approved step lists it in spendKinds): necessity, expectedBenefit, alternatives, estimatedPlanCostAtomic, optional evidenceIds/uncertainties. Never invent revenue for an operational expense.",
+      properties: { kind: { type: "string", enum: ["commercial", "operational"] }, expectedRevenueAtomic: { type: "string" }, estimatedPlanCostAtomic: { type: "string" },
+      evidenceIds: { type: "array", items: { type: "string" } }, uncertainties: { type: "string" }, freeAlternative: { type: "string" },
+      necessity: { type: "string" }, expectedBenefit: { type: "string" }, alternatives: { type: "string" } },
+      required: ["kind", "estimatedPlanCostAtomic"] },
   }, required: ["qui", "quoi", "ou", "quand", "comment", "combien", "pourquoi", "sourceEventId"],
 };
 

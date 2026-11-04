@@ -11,13 +11,32 @@ export interface Qqoqccp {
   parentDecisionId?: string;
   goalId?: string;
   stepId?: string;
-  economics?: {
-    expectedRevenueAtomic: string;
-    estimatedPlanCostAtomic: string;
-    evidenceIds: string[];
-    uncertainties: string;
-    freeAlternative: string;
-  };
+  /** Commercial (default) or operational spending case; see CommercialCase / OperationalCase. */
+  economics?: CommercialCase | OperationalCase;
+}
+
+/** Kind of spending an owner-approved plan step allows. Defaults to commercial only. */
+export type SpendKind = "commercial" | "operational";
+
+/** Commercial spend: economic hypotheses, cumulative cost, cited evidence and uncertainty. */
+export interface CommercialCase {
+  kind?: "commercial";
+  expectedRevenueAtomic: string;
+  estimatedPlanCostAtomic: string;
+  evidenceIds: string[];
+  uncertainties: string;
+  freeAlternative: string;
+}
+
+/** Operational spend: necessity for the mission, expected benefit, alternatives and cost. No revenue is required. */
+export interface OperationalCase {
+  kind: "operational";
+  necessity: string;
+  expectedBenefit: string;
+  alternatives: string;
+  estimatedPlanCostAtomic: string;
+  evidenceIds?: string[];
+  uncertainties?: string;
 }
 
 export interface ApprovedGoal {
@@ -31,6 +50,8 @@ export interface ApprovedGoal {
     maxTotalCents: number;
     allowedHosts: string[] | "public";
     allowedRecipients?: string[];
+    /** Owner-approved spending kinds for this step; absent means ["commercial"]. */
+    spendKinds?: SpendKind[];
     evidence: Array<{ id: string; summary: string }>;
   }>;
 }

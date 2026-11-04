@@ -208,6 +208,24 @@ de commerçants vérifiées. Le signataire compare alors l'adresse du devis rée
 à cette liste ; une liste vide interdit tout achat pour l'étape. Sans cette
 option, l'adresse est celle du devis obtenu sur le domaine autorisé.
 
+### Dépenses commerciales et opérationnelles
+
+Chaque étape peut déclarer `spendKinds` : `["commercial"]` (valeur par défaut si
+absent), `["operational"]` ou les deux. Le signataire refuse une dépense dont le
+type n'a pas été approuvé par le propriétaire pour l'étape (`SPEND_KIND_NOT_APPROVED`).
+
+| Type | `review.economics` exigé |
+| --- | --- |
+| `commercial` (défaut) | `expectedRevenueAtomic` > `estimatedPlanCostAtomic`, `evidenceIds` cités, `uncertainties`, `freeAlternative` |
+| `operational` | `kind: "operational"`, `necessity` (nécessité pour la mission), `expectedBenefit`, `alternatives`, `estimatedPlanCostAtomic` ; `evidenceIds` et `uncertainties` facultatifs mais vérifiés s'ils sont fournis |
+
+Une dépense opérationnelle n'exige **aucune recette** : ne pas en inventer. Dans
+les deux cas restent obligatoires : QQOQCCP complet et récent, mission et étape
+approuvées, domaine et commerçant autorisés, coût cumulé de la mission incluant
+les dépenses déjà autorisées, budgets par achat, horaire, journalier (EUR),
+mission et étape, et journalisation avant signature. Le type retenu figure dans
+l'événement `service_authorized` (`spendKind`).
+
 ```sh
 node dist/wallet-guardian/cli.js approve-goal --directory /var/lib/wallet-guardian --file /chemin/plan-revu.json
 node dist/wallet-guardian/cli.js status --directory /var/lib/wallet-guardian

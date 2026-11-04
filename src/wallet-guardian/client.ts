@@ -34,8 +34,14 @@ export class GuardianClient {
       body: body === undefined ? undefined : JSON.stringify(body),
       timeout: body === undefined ? 10_000 : 90_000, retries: 0, redirectPolicy: "none", networkPolicy: "configured",
     });
-    const data = await res.json();
-    if (!res.ok) throw new Error(`Guardian ${res.status}: ${String(data?.code ?? "")}: ${String(data?.error ?? "request refused")}`);
+    // A proxy error page (502/504) or an empty body must not surface as a JSON parse error.
+    const raw = await res.text();
+    let data: any;
+    try { data = raw ? JSON.parse(raw) : undefined; } catch { data = undefined; }
+    if (!res.ok) throw new Error(data && typeof data === "object"
+      ? `Guardian ${res.status}: ${String(data.code ?? "")}: ${String(data.error ?? "request refused")}`
+      : `Guardian ${res.status}: UNAVAILABLE: guardian unreachable or returned a non-JSON response; no local signing fallback, work without payment may continue`);
+    if (data === undefined) throw new Error(`Guardian ${res.status}: non-JSON response refused`);
     return data;
   }
   async status(): Promise<any> {
