@@ -411,7 +411,8 @@ function transformMessagesForAnthropic(
         });
       }
       if (content.length === 0) {
-        content.push({ type: "text", text: "" });
+        // The Messages API rejects empty text blocks.
+        content.push({ type: "text", text: "(no output)" });
       }
       // Merge consecutive assistant messages
       const last = transformed[transformed.length - 1];
@@ -449,11 +450,21 @@ function transformMessagesForAnthropic(
     }
   }
 
+  // Autonomous turns have no new input, so the replayed history can end with the
+  // agent's own turn. Recent models reject assistant prefill: always end with a
+  // user message that asks for the next autonomous step (never a fake owner order).
+  const final = transformed[transformed.length - 1];
+  if (final && final.role === "assistant") {
+    transformed.push({ role: "user", content: AUTONOMOUS_CONTINUE });
+  }
+
   return {
     system: systemParts.length > 0 ? systemParts.join("\n\n") : undefined,
     messages: transformed,
   };
 }
+
+export const AUTONOMOUS_CONTINUE = "[system] No new input. Continue autonomously: decide and take your next action, or sleep if there is nothing useful to do.";
 
 function parseToolArguments(raw: string): Record<string, unknown> {
   try {

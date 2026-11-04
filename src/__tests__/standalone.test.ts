@@ -80,6 +80,24 @@ describe("Claude without Conway", () => {
     } finally { db.close(); }
   });
 
+  it("never sends an assistant-final conversation (no prefill) to Anthropic", async () => {
+    const config = configuration();
+    const fetch = vi.spyOn(globalThis, "fetch").mockResolvedValue(Response.json({ id: "p-1", model: config.inferenceModel,
+      content: [{ type: "text", text: "ok" }], usage: { input_tokens: 5, output_tokens: 1 }, stop_reason: "end_turn" }));
+    const inference = createInferenceClient({ apiUrl: config.conwayApiUrl, apiKey: "", defaultModel: config.inferenceModel, maxTokens: 256, anthropicApiKey: config.anthropicApiKey });
+    await inference.chat([{ role: "system", content: "rules" }, { role: "user", content: "[wakeup] start" },
+      { role: "assistant", content: "" }, { role: "assistant", content: "I reviewed the host." }]);
+    const body = JSON.parse(fetch.mock.calls[0][1]!.body as string);
+    const last = body.messages[body.messages.length - 1];
+    expect(last.role).toBe("user");
+    expect(String(last.content)).toContain("Continue autonomously");
+    expect(body.messages.flatMap((m: any) => Array.isArray(m.content) ? m.content : []).every((b: any) => b.type !== "text" || b.text !== "")).toBe(true);
+    fetch.mockClear();
+    await inference.chat([{ role: "user", content: "[owner] hello" }]);
+    const plain = JSON.parse(fetch.mock.calls[0][1]!.body as string);
+    expect(plain.messages).toEqual([{ role: "user", content: "[owner] hello" }]);
+  });
+
   it("does not make even a free-looking request when the daily inference budget is zero", async () => {
     const config = configuration(); config.treasuryPolicy = { ...DEFAULT_TREASURY_POLICY, maxInferenceDailyCents: 0 };
     const db = createTestDb(); const identity = { ...createTestIdentity(), sandboxId: "", apiKey: "" };
