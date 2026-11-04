@@ -86,7 +86,17 @@ describe("Claude without Conway", () => {
     const fetch = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("Unexpected billable call"));
     const conway = createConwayClient({ apiUrl: config.conwayApiUrl, apiKey: "", sandboxId: "", execution: config.execution, standalone: true });
     const inference = createInferenceClient({ apiUrl: config.conwayApiUrl, apiKey: "", defaultModel: config.inferenceModel, maxTokens: 2048, anthropicApiKey: config.anthropicApiKey });
-    try { await runAgentLoop({ config, identity, db, conway, inference }); expect(fetch).not.toHaveBeenCalled(); }
+    try {
+      await runAgentLoop({ config, identity, db, conway, inference });
+      expect(fetch).not.toHaveBeenCalled();
+      expect(db.getAgentState()).toBe("sleeping");
+      expect(db.getTurnCount()).toBe(0);
+      expect(db.getKV("sleep_reason")).toContain("next request estimate");
+      const retry = new Date(db.getKV("sleep_until")!);
+      expect(retry.getTime()).toBeGreaterThan(Date.now());
+      expect(retry.getUTCHours()).toBe(0);
+      expect(retry.getUTCMinutes()).toBe(0);
+    }
     finally { db.close(); }
   });
 });

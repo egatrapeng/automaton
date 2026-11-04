@@ -639,6 +639,19 @@ export async function runAgentLoop(
         (msgs, opts) => inference.chat(isStandalone(config) ? messages : msgs, { ...opts, tools: inferenceTools }),
       );
 
+      if (routerResult.finishReason === "budget_exceeded") {
+        // A local budget refusal is not an inference turn or productive thought.
+        // Preserve history and wait, rather than writing ten zero-token turns.
+        const retryAt = new Date(Date.now() + 3_600_000);
+        if (routerResult.content.includes("daily inference limit")) retryAt.setUTCHours(24, 0, 0, 0);
+        db.setKV("sleep_until", retryAt.toISOString());
+        db.setKV("sleep_reason", routerResult.content);
+        db.setAgentState("sleeping");
+        onStateChange?.("sleeping");
+        log(config, `[BUDGET] ${routerResult.content}. Waiting until ${retryAt.toISOString()}; no API call made for this refusal.`);
+        break;
+      }
+
       // Build a compatible response for the rest of the loop
       const response = {
         message: { content: routerResult.content, role: "assistant" as const },

@@ -24,6 +24,13 @@ $50/M output), not a live pricing feed or provider invoice. Local limits do not
 constitute an enforceable cap against a host administrator or concurrent external
 API clients.
 
+If the daily estimate plus the next request estimate exceeds the limit, the agent
+logs both values and sleeps until midnight UTC. Other local budget refusals wait
+one hour. A refusal is not stored as an inference turn and does not trigger a
+billable API call. The configured limit is never raised or reset automatically.
+This can be a preflight refusal even when recorded spend is still below the
+limit; compare the estimates with the provider's actual usage before adjusting it.
+
 `runtimeMode: "standalone"` explicitly requires host execution, an Anthropic key
 and a Claude model ID. It does not synthesize Conway credits, register with
 Conway, poll Conway balances, buy credits or send requests to its control plane.

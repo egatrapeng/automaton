@@ -70,11 +70,12 @@ export class InferenceRouter {
     );
 
     const budgetCheck = this.budget.checkBudget(estimatedCostCents, model.modelId);
+    const dailySpent = request.dailyBudgetCents !== undefined ? this.budget.getDailyCost() : 0;
     const dailyExceeded = request.dailyBudgetCents !== undefined &&
-      (request.dailyBudgetCents <= 0 || this.budget.getDailyCost() + estimatedCostCents > request.dailyBudgetCents);
+      (request.dailyBudgetCents <= 0 || dailySpent + estimatedCostCents > request.dailyBudgetCents);
     if (!budgetCheck.allowed || dailyExceeded) {
       return {
-        content: `Budget exceeded: ${dailyExceeded ? "daily inference limit" : budgetCheck.reason}`,
+        content: `Budget exceeded: ${dailyExceeded ? `daily inference limit (recorded estimate ${dailySpent}c + next request estimate ${estimatedCostCents}c > limit ${request.dailyBudgetCents}c; not a provider invoice)` : budgetCheck.reason}`,
         model: model.modelId,
         provider: model.provider,
         inputTokens: 0,
